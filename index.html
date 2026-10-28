@@ -3,152 +3,209 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
-<title>WebAR サンプル</title>
+<title>WebAR 撮影サンプル</title>
 <style>
-  html, body { margin: 0; height: 100%; background: #111; color: #eee;
-    font-family: system-ui, -apple-system, "Hiragino Sans", sans-serif; overflow: hidden; }
-  #info { position: absolute; top: 0; left: 0; right: 0; padding: 16px;
-    text-align: center; font-size: 15px; line-height: 1.6; z-index: 10; pointer-events: none; }
-  #info b { color: #7fd4ff; }
-  #msg { margin-top: 8px; color: #ffb37f; }
+  html, body { margin: 0; height: 100%; background: #000; color: #fff; overflow: hidden;
+    font-family: system-ui, -apple-system, "Hiragino Sans", sans-serif; }
+  #container { position: absolute; inset: 0; overflow: hidden; }
+
+  #start { position: absolute; inset: 0; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; gap: 16px; padding: 24px;
+    text-align: center; line-height: 1.7; background: #111; z-index: 20; }
+  #start a { color: #7fd4ff; }
+  button { font: inherit; border: 0; cursor: pointer; }
+  .primary { background: #7fd4ff; color: #002233; font-weight: 700;
+    padding: 14px 28px; border-radius: 999px; font-size: 17px; }
+
+  #status { position: absolute; top: 16px; left: 50%; transform: translateX(-50%);
+    background: rgba(0,0,0,.55); padding: 8px 16px; border-radius: 999px;
+    font-size: 14px; z-index: 10; white-space: nowrap; display: none; }
+
+  #shutter { position: absolute; bottom: 32px; left: 50%; transform: translateX(-50%);
+    width: 72px; height: 72px; border-radius: 50%; background: #fff;
+    box-shadow: 0 0 0 5px rgba(255,255,255,.4); z-index: 10; display: none; }
+  #shutter:active { transform: translateX(-50%) scale(.92); }
+  #flash { position: absolute; inset: 0; background: #fff; opacity: 0;
+    pointer-events: none; z-index: 15; transition: opacity .3s; }
+
+  #preview { position: absolute; inset: 0; background: rgba(0,0,0,.92); z-index: 30;
+    display: none; flex-direction: column; align-items: center; justify-content: center;
+    gap: 16px; padding: 16px; box-sizing: border-box; }
+  #preview img { max-width: 100%; max-height: 70vh; border-radius: 8px; }
+  #preview .row { display: flex; gap: 12px; flex-wrap: wrap; justify-content: center; }
+  .secondary { background: #333; color: #fff; padding: 12px 22px; border-radius: 999px; }
 </style>
 <script type="importmap">
 { "imports": {
   "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
-  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/",
+  "mindar-image-three": "https://cdn.jsdelivr.net/npm/mind-ar@1.2.5/dist/mindar-image-three.prod.js"
 } }
 </script>
 </head>
 <body>
-<div id="info">
-  <b>WebAR サンプル</b><br>
-  下の「START AR」を押し、カメラで床を映してください。<br>
-  リングが表示されたらタップで立方体を配置します。
-  <div id="msg"></div>
+<div id="container"></div>
+
+<div id="start">
+  <div><b style="font-size:20px">WebAR 撮影サンプル</b></div>
+  <div>
+    下の<a href="https://cdn.jsdelivr.net/gh/hiukim/mind-ar-js@1.2.5/examples/image-tracking/assets/card-example/card.png" target="_blank">マーカー画像</a>を
+    別の画面に表示するか印刷して、<br>カメラに映してください。
+  </div>
+  <button class="primary" id="startBtn">カメラを起動</button>
+  <div id="startMsg" style="color:#ffb37f"></div>
+</div>
+
+<div id="status">マーカー画像を映してください</div>
+<button id="shutter" aria-label="撮影"></button>
+<div id="flash"></div>
+
+<div id="preview">
+  <img id="photo" alt="撮影した写真">
+  <div class="row">
+    <button class="primary" id="saveBtn">保存</button>
+    <button class="secondary" id="shareBtn" style="display:none">共有</button>
+    <button class="secondary" id="closeBtn">閉じる</button>
+  </div>
 </div>
 
 <script type="module">
 import * as THREE from 'three';
-import { ARButton } from 'three/addons/webxr/ARButton.js';
+import { MindARThree } from 'mindar-image-three';
 
-const msg = document.getElementById('msg');
+const container = document.getElementById('container');
+const statusEl  = document.getElementById('status');
+const shutter   = document.getElementById('shutter');
 
-// --- 基本セットアップ ---
-const scene = new THREE.Scene();
-const camera = new THREE.PerspectiveCamera(70, innerWidth / innerHeight, 0.01, 20);
+// --- MindAR セットアップ（サンプルのカード画像をマーカーに使用） ---
+const mindarThree = new MindARThree({
+  container,
+  imageTargetSrc: 'https://cdn.jsdelivr.net/gh/hiukim/mind-ar-js@1.2.5/examples/image-tracking/assets/card-example/card.mind',
+  uiLoading: 'no', uiScanning: 'no', uiError: 'no'
+});
+const { renderer, scene, camera } = mindarThree;
 
-const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
-renderer.setPixelRatio(devicePixelRatio);
-renderer.setSize(innerWidth, innerHeight);
-renderer.xr.enabled = true;
-document.body.appendChild(renderer.domElement);
-
-scene.add(new THREE.HemisphereLight(0xffffff, 0x444444, 2));
+scene.add(new THREE.HemisphereLight(0xffffff, 0x445566, 2.2));
 const dir = new THREE.DirectionalLight(0xffffff, 1.5);
-dir.position.set(1, 3, 2);
+dir.position.set(0.5, 1, 1);
 scene.add(dir);
 
-// --- 対応チェック ---
-if (!('xr' in navigator)) {
-  msg.textContent = 'このブラウザはWebXRに非対応です（Android版Chrome推奨）。';
-} else {
-  navigator.xr.isSessionSupported('immersive-ar').then(ok => {
-    if (!ok) msg.textContent = 'この端末はARセッションに非対応です（ARCore対応のAndroid端末が必要）。';
-  });
+// --- マーカーの上に表示する3Dオブジェクト ---
+// マーカー画像の横幅 = 1 の単位系
+const anchor = mindarThree.addAnchor(0);
+const group = new THREE.Group();
+anchor.group.add(group);
+
+const base = new THREE.Mesh(
+  new THREE.CircleGeometry(0.35, 48),
+  new THREE.MeshBasicMaterial({ color: 0x7fd4ff, transparent: true, opacity: 0.35 })
+);
+group.add(base);
+
+const knot = new THREE.Mesh(
+  new THREE.TorusKnotGeometry(0.15, 0.05, 128, 16),
+  new THREE.MeshStandardMaterial({ color: 0xff7aa8, roughness: 0.35, metalness: 0.2 })
+);
+knot.position.z = 0.3;
+group.add(knot);
+
+const cube = new THREE.Mesh(
+  new THREE.BoxGeometry(0.12, 0.12, 0.12),
+  new THREE.MeshStandardMaterial({ color: 0xffd36e, roughness: 0.4 })
+);
+group.add(cube);
+
+anchor.onTargetFound = () => { statusEl.textContent = '認識しました！撮影できます'; };
+anchor.onTargetLost  = () => { statusEl.textContent = 'マーカー画像を映してください'; };
+
+// --- 起動 ---
+document.getElementById('startBtn').addEventListener('click', async () => {
+  const msg = document.getElementById('startMsg');
+  msg.textContent = '起動中…';
+  try {
+    await mindarThree.start();
+    document.getElementById('start').style.display = 'none';
+    statusEl.style.display = 'block';
+    shutter.style.display = 'block';
+
+    const clock = new THREE.Clock();
+    renderer.setAnimationLoop(() => {
+      const t = clock.getElapsedTime();
+      knot.rotation.x = t * 0.8;
+      knot.rotation.y = t * 1.2;
+      cube.position.set(Math.cos(t * 2) * 0.32, Math.sin(t * 2) * 0.32, 0.3);
+      cube.rotation.set(t, t * 1.3, 0);
+      renderer.render(scene, camera);
+    });
+  } catch (e) {
+    msg.textContent = 'カメラを起動できませんでした：' + (e.message || e);
+  }
+});
+
+// --- 撮影：カメラ映像 + 3D描画 を1枚の画像に合成 ---
+let lastBlob = null;
+
+function capture() {
+  const video = container.querySelector('video');
+  const cRect = container.getBoundingClientRect();
+  const dpr = Math.min(devicePixelRatio || 1, 2);
+
+  const out = document.createElement('canvas');
+  out.width  = Math.round(cRect.width  * dpr);
+  out.height = Math.round(cRect.height * dpr);
+  const ctx = out.getContext('2d');
+
+  // 画面に表示されている位置・大きさのまま描く
+  const drawAsShown = (el, src) => {
+    const r = el.getBoundingClientRect();
+    ctx.drawImage(src,
+      (r.left - cRect.left) * dpr, (r.top - cRect.top) * dpr,
+      r.width * dpr, r.height * dpr);
+  };
+
+  if (video) drawAsShown(video, video);
+
+  // 直前に描画し直してから読み取る（WebGLの描画内容が消える前に取得）
+  renderer.render(scene, camera);
+  drawAsShown(renderer.domElement, renderer.domElement);
+
+  return new Promise(res => out.toBlob(res, 'image/jpeg', 0.92));
 }
 
-// ARボタン（hit-test = 現実の平面検出 を要求）
-// ※ dom-overlay は端末によって3D描画が表示されなくなるため使わない
-document.body.appendChild(ARButton.createButton(renderer, {
-  requiredFeatures: ['hit-test']
-}));
+shutter.addEventListener('click', async () => {
+  const flash = document.getElementById('flash');
+  flash.style.transition = 'none'; flash.style.opacity = '0.85';
+  requestAnimationFrame(() => { flash.style.transition = 'opacity .3s'; flash.style.opacity = '0'; });
 
-// --- 照準リング（床の検出位置を示す） ---
-const reticle = new THREE.Mesh(
-  new THREE.RingGeometry(0.08, 0.1, 32).rotateX(-Math.PI / 2),
-  new THREE.MeshBasicMaterial({ color: 0x7fd4ff })
-);
-reticle.matrixAutoUpdate = false;
-reticle.visible = false;
-scene.add(reticle);
+  lastBlob = await capture();
+  document.getElementById('photo').src = URL.createObjectURL(lastBlob);
 
-// --- タップで立方体を配置 ---
-const boxGeo = new THREE.BoxGeometry(0.1, 0.1, 0.1).translate(0, 0.05, 0);
-const controller = renderer.xr.getController(0);
-controller.addEventListener('select', () => {
-  if (!reticle.visible) return;
-  const mat = new THREE.MeshStandardMaterial({
-    color: new THREE.Color().setHSL(Math.random(), 0.7, 0.55)
-  });
-  const box = new THREE.Mesh(boxGeo, mat);
-  reticle.matrix.decompose(box.position, box.quaternion, box.scale);
-  scene.add(box);
-});
-scene.add(controller);
+  const file = new File([lastBlob], 'ar-photo.jpg', { type: 'image/jpeg' });
+  document.getElementById('shareBtn').style.display =
+    (navigator.canShare && navigator.canShare({ files: [file] })) ? 'inline-block' : 'none';
 
-// --- 状態表示（原因の切り分け用） ---
-const setStatus = t => { msg.textContent = t; };
-
-// --- hit-test ---
-let hitTestSource = null;
-let hitTestRequested = false;
-let everHit = false;
-
-renderer.xr.addEventListener('sessionstart', () => {
-  // AR中はページ背景を透明に（カメラ映像との合成を妨げないように）
-  document.documentElement.style.background = 'transparent';
-  document.body.style.background = 'transparent';
-  scene.background = null;
-  setStatus('AR開始：床の検出を準備中…');
-});
-renderer.xr.addEventListener('sessionend', () => {
-  document.documentElement.style.background = '';
-  document.body.style.background = '';
+  document.getElementById('preview').style.display = 'flex';
 });
 
-renderer.setAnimationLoop((time, frame) => {
-  if (frame) {
-    const refSpace = renderer.xr.getReferenceSpace();
-    const session = renderer.xr.getSession();
-
-    if (!hitTestRequested) {
-      hitTestRequested = true;
-      session.requestReferenceSpace('viewer').then(viewerSpace => {
-        // 平面だけでなく特徴点も対象にして、検出されやすくする
-        const opts = { space: viewerSpace, entityTypes: ['plane', 'point'] };
-        return session.requestHitTestSource(opts)
-          .catch(() => session.requestHitTestSource({ space: viewerSpace }));
-      }).then(src => {
-        hitTestSource = src;
-        setStatus('床を探しています…スマホをゆっくり左右に動かしてください');
-      }).catch(err => {
-        setStatus('hit-testの開始に失敗：' + err.message);
-      });
-      session.addEventListener('end', () => {
-        hitTestRequested = false; hitTestSource = null; everHit = false;
-        setStatus('');
-      });
-    }
-
-    if (hitTestSource) {
-      const hits = frame.getHitTestResults(hitTestSource);
-      const pose = hits.length ? hits[0].getPose(refSpace) : null;
-      if (pose) {
-        reticle.visible = true;
-        reticle.matrix.fromArray(pose.transform.matrix);
-        if (!everHit) { everHit = true; setStatus('床を検出しました。タップで配置できます'); }
-      } else {
-        reticle.visible = false;
-      }
-    }
-  }
-  renderer.render(scene, camera);
+document.getElementById('saveBtn').addEventListener('click', () => {
+  if (!lastBlob) return;
+  const a = document.createElement('a');
+  const d = new Date();
+  const pad = n => String(n).padStart(2, '0');
+  a.download = `ar-photo_${d.getFullYear()}${pad(d.getMonth()+1)}${pad(d.getDate())}_${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}.jpg`;
+  a.href = URL.createObjectURL(lastBlob);
+  a.click();
 });
 
-addEventListener('resize', () => {
-  camera.aspect = innerWidth / innerHeight;
-  camera.updateProjectionMatrix();
-  renderer.setSize(innerWidth, innerHeight);
+document.getElementById('shareBtn').addEventListener('click', async () => {
+  if (!lastBlob) return;
+  try {
+    await navigator.share({ files: [new File([lastBlob], 'ar-photo.jpg', { type: 'image/jpeg' })] });
+  } catch (_) { /* キャンセル時は何もしない */ }
+});
+
+document.getElementById('closeBtn').addEventListener('click', () => {
+  document.getElementById('preview').style.display = 'none';
 });
 </script>
 </body>
