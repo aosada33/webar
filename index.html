@@ -3,62 +3,78 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
-<title>WebAR 撮影サンプル</title>
+<title>ARカメラ サンプル</title>
 <style>
   html, body { margin: 0; height: 100%; background: #000; color: #fff; overflow: hidden;
-    font-family: system-ui, -apple-system, "Hiragino Sans", sans-serif; }
-  #container { position: absolute; inset: 0; overflow: hidden; }
+    font-family: system-ui, -apple-system, "Hiragino Sans", sans-serif;
+    -webkit-user-select: none; user-select: none; }
+  #video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+  #video.mirror { transform: scaleX(-1); }
+  #gl { position: absolute; inset: 0; width: 100%; height: 100%; touch-action: none; }
+
+  button { font: inherit; border: 0; cursor: pointer; color: #fff; }
+  .chip { background: rgba(0,0,0,.5); padding: 8px 14px; border-radius: 999px; font-size: 14px; }
+  .chip.on { background: #7fd4ff; color: #002233; }
+
+  #top { position: absolute; top: 12px; left: 12px; right: 12px; display: none;
+    justify-content: space-between; align-items: flex-start; gap: 8px; z-index: 10; pointer-events: none; }
+  #top > * { pointer-events: auto; }
+  #hint { font-size: 13px; line-height: 1.5; background: rgba(0,0,0,.45);
+    padding: 6px 12px; border-radius: 12px; pointer-events: none !important; }
+  #topBtns { display: flex; flex-direction: column; gap: 8px; align-items: flex-end; }
+
+  #bottom { position: absolute; bottom: 28px; left: 0; right: 0; display: none;
+    justify-content: space-around; align-items: center; z-index: 10; }
+  .round { width: 54px; height: 54px; border-radius: 50%; background: rgba(0,0,0,.5);
+    font-size: 24px; display: flex; align-items: center; justify-content: center; }
+  #shutter { width: 74px; height: 74px; border-radius: 50%; background: #fff;
+    box-shadow: 0 0 0 5px rgba(255,255,255,.4); }
+  #shutter:active { transform: scale(.92); }
+  #flash { position: absolute; inset: 0; background: #fff; opacity: 0;
+    pointer-events: none; z-index: 15; }
 
   #start { position: absolute; inset: 0; display: flex; flex-direction: column;
     align-items: center; justify-content: center; gap: 16px; padding: 24px;
     text-align: center; line-height: 1.7; background: #111; z-index: 20; }
-  #start a { color: #7fd4ff; }
-  button { font: inherit; border: 0; cursor: pointer; }
   .primary { background: #7fd4ff; color: #002233; font-weight: 700;
     padding: 14px 28px; border-radius: 999px; font-size: 17px; }
-
-  #status { position: absolute; top: 16px; left: 50%; transform: translateX(-50%);
-    background: rgba(0,0,0,.55); padding: 8px 16px; border-radius: 999px;
-    font-size: 14px; z-index: 10; white-space: nowrap; display: none; }
-
-  #shutter { position: absolute; bottom: 32px; left: 50%; transform: translateX(-50%);
-    width: 72px; height: 72px; border-radius: 50%; background: #fff;
-    box-shadow: 0 0 0 5px rgba(255,255,255,.4); z-index: 10; display: none; }
-  #shutter:active { transform: translateX(-50%) scale(.92); }
-  #flash { position: absolute; inset: 0; background: #fff; opacity: 0;
-    pointer-events: none; z-index: 15; transition: opacity .3s; }
+  .secondary { background: #333; padding: 12px 22px; border-radius: 999px; }
 
   #preview { position: absolute; inset: 0; background: rgba(0,0,0,.92); z-index: 30;
     display: none; flex-direction: column; align-items: center; justify-content: center;
     gap: 16px; padding: 16px; box-sizing: border-box; }
   #preview img { max-width: 100%; max-height: 70vh; border-radius: 8px; }
   #preview .row { display: flex; gap: 12px; flex-wrap: wrap; justify-content: center; }
-  .secondary { background: #333; color: #fff; padding: 12px 22px; border-radius: 999px; }
 </style>
 <script type="importmap">
-{ "imports": {
-  "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
-  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/",
-  "mindar-image-three": "https://cdn.jsdelivr.net/npm/mind-ar@1.2.5/dist/mindar-image-three.prod.js"
-} }
+{ "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js" } }
 </script>
 </head>
 <body>
-<div id="container"></div>
+<video id="video" playsinline muted autoplay></video>
+<canvas id="gl"></canvas>
+
+<div id="top">
+  <div id="hint">1本指：移動　ピンチ：拡大縮小<br>2本指でひねる：回転</div>
+  <div id="topBtns">
+    <button class="chip on" id="tiltBtn">傾き追従 ON</button>
+    <button class="chip" id="resetBtn">位置リセット</button>
+  </div>
+</div>
+
+<div id="bottom">
+  <button class="round" id="shapeBtn" aria-label="オブジェクト切替">◆</button>
+  <button id="shutter" aria-label="撮影"></button>
+  <button class="round" id="flipBtn" aria-label="カメラ切替">⟲</button>
+</div>
+<div id="flash"></div>
 
 <div id="start">
-  <div><b style="font-size:20px">WebAR 撮影サンプル</b></div>
-  <div>
-    下の<a href="https://cdn.jsdelivr.net/gh/hiukim/mind-ar-js@1.2.5/examples/image-tracking/assets/card-example/card.png" target="_blank">マーカー画像</a>を
-    別の画面に表示するか印刷して、<br>カメラに映してください。
-  </div>
+  <div><b style="font-size:20px">ARカメラ サンプル</b></div>
+  <div>カメラ映像の上に3Dオブジェクトを置いて<br>写真を撮れます。マーカーは不要です。</div>
   <button class="primary" id="startBtn">カメラを起動</button>
   <div id="startMsg" style="color:#ffb37f"></div>
 </div>
-
-<div id="status">マーカー画像を映してください</div>
-<button id="shutter" aria-label="撮影"></button>
-<div id="flash"></div>
 
 <div id="preview">
   <img id="photo" alt="撮影した写真">
@@ -71,142 +87,283 @@
 
 <script type="module">
 import * as THREE from 'three';
-import { MindARThree } from 'mindar-image-three';
 
-const container = document.getElementById('container');
-const statusEl  = document.getElementById('status');
-const shutter   = document.getElementById('shutter');
+const $ = id => document.getElementById(id);
+const video = $('video');
+const canvas = $('gl');
 
-// --- MindAR セットアップ（サンプルのカード画像をマーカーに使用） ---
-const mindarThree = new MindARThree({
-  container,
-  imageTargetSrc: 'https://cdn.jsdelivr.net/gh/hiukim/mind-ar-js@1.2.5/examples/image-tracking/assets/card-example/card.mind',
-  uiLoading: 'no', uiScanning: 'no', uiError: 'no'
-});
-const { renderer, scene, camera } = mindarThree;
+// ===== three.js =====
+const renderer = new THREE.WebGLRenderer({ canvas, alpha: true, antialias: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio || 1, 2));
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(60, 1, 0.1, 100);
 
 scene.add(new THREE.HemisphereLight(0xffffff, 0x445566, 2.2));
-const dir = new THREE.DirectionalLight(0xffffff, 1.5);
-dir.position.set(0.5, 1, 1);
+const dir = new THREE.DirectionalLight(0xffffff, 1.6);
+dir.position.set(2, 3, 4);
 scene.add(dir);
 
-// --- マーカーの上に表示する3Dオブジェクト ---
-// マーカー画像の横幅 = 1 の単位系
-const anchor = mindarThree.addAnchor(0);
-const group = new THREE.Group();
-anchor.group.add(group);
+// 置くオブジェクト（holder を動かし、中身を差し替える）
+const holder = new THREE.Group();
+scene.add(holder);
 
-const base = new THREE.Mesh(
-  new THREE.CircleGeometry(0.35, 48),
-  new THREE.MeshBasicMaterial({ color: 0x7fd4ff, transparent: true, opacity: 0.35 })
-);
-group.add(base);
+const shapes = [
+  () => new THREE.Mesh(new THREE.TorusKnotGeometry(0.5, 0.17, 160, 20),
+        new THREE.MeshStandardMaterial({ color: 0xff7aa8, roughness: 0.35, metalness: 0.2 })),
+  () => new THREE.Mesh(new THREE.BoxGeometry(0.9, 0.9, 0.9),
+        new THREE.MeshStandardMaterial({ color: 0xffd36e, roughness: 0.4 })),
+  () => new THREE.Mesh(new THREE.TorusGeometry(0.5, 0.2, 32, 64),
+        new THREE.MeshStandardMaterial({ color: 0x7fd4ff, roughness: 0.25, metalness: 0.3 })),
+  () => new THREE.Mesh(new THREE.IcosahedronGeometry(0.6, 0),
+        new THREE.MeshStandardMaterial({ color: 0x9cf28a, roughness: 0.5, flatShading: true })),
+];
+let shapeIndex = 0;
+let current = null;
+function setShape(i) {
+  if (current) { holder.remove(current); current.geometry.dispose(); current.material.dispose(); }
+  current = shapes[i]();
+  holder.add(current);
+}
+setShape(0);
 
-const knot = new THREE.Mesh(
-  new THREE.TorusKnotGeometry(0.15, 0.05, 128, 16),
-  new THREE.MeshStandardMaterial({ color: 0xff7aa8, roughness: 0.35, metalness: 0.2 })
-);
-knot.position.z = 0.3;
-group.add(knot);
+const DIST = 4; // カメラからの初期距離
+function resetObject() {
+  holder.position.copy(new THREE.Vector3(0, 0, -DIST).applyQuaternion(camera.quaternion));
+  holder.scale.setScalar(1);
+  holder.rotation.set(0.3, 0, 0);
+}
 
-const cube = new THREE.Mesh(
-  new THREE.BoxGeometry(0.12, 0.12, 0.12),
-  new THREE.MeshStandardMaterial({ color: 0xffd36e, roughness: 0.4 })
-);
-group.add(cube);
+function resize() {
+  const w = innerWidth, h = innerHeight;
+  renderer.setSize(w, h, false);
+  camera.aspect = w / h;
+  camera.updateProjectionMatrix();
+}
+addEventListener('resize', resize);
+resize();
 
-anchor.onTargetFound = () => { statusEl.textContent = '認識しました！撮影できます'; };
-anchor.onTargetLost  = () => { statusEl.textContent = 'マーカー画像を映してください'; };
+// ===== 傾き追従（デバイスの向きでカメラを回す＝3Dがその場に残って見える） =====
+let tiltOn = true;
+let baseQ = null;         // 起動時（リセット時）の向き
+let deviceQ = null;       // 現在の向き
+const zee = new THREE.Vector3(0, 0, 1);
+const euler = new THREE.Euler();
+const q0 = new THREE.Quaternion();
+const q1 = new THREE.Quaternion(-Math.sqrt(0.5), 0, 0, Math.sqrt(0.5));
 
-// --- 起動 ---
-document.getElementById('startBtn').addEventListener('click', async () => {
-  const msg = document.getElementById('startMsg');
-  msg.textContent = '起動中…';
+function onOrientation(e) {
+  if (e.alpha == null) return;
+  const d = THREE.MathUtils.degToRad;
+  const orient = d((screen.orientation && screen.orientation.angle) || window.orientation || 0);
+  const q = new THREE.Quaternion();
+  euler.set(d(e.beta), d(e.alpha), -d(e.gamma), 'YXZ');
+  q.setFromEuler(euler);
+  q.multiply(q1);
+  q.multiply(q0.setFromAxisAngle(zee, -orient));
+  deviceQ = q;
+  if (!baseQ) baseQ = q.clone();
+}
+
+async function enableOrientation() {
   try {
-    await mindarThree.start();
-    document.getElementById('start').style.display = 'none';
-    statusEl.style.display = 'block';
-    shutter.style.display = 'block';
+    if (typeof DeviceOrientationEvent !== 'undefined' &&
+        typeof DeviceOrientationEvent.requestPermission === 'function') {
+      const r = await DeviceOrientationEvent.requestPermission(); // iPhone用
+      if (r !== 'granted') throw new Error('denied');
+    }
+    addEventListener('deviceorientation', onOrientation);
+  } catch (_) {
+    tiltOn = false;
+    updateTiltBtn();
+  }
+}
 
-    const clock = new THREE.Clock();
+function updateCameraFromDevice() {
+  if (tiltOn && deviceQ && baseQ) {
+    camera.quaternion.copy(baseQ.clone().invert().multiply(deviceQ));
+  } else {
+    camera.quaternion.identity();
+  }
+}
+
+function updateTiltBtn() {
+  const b = $('tiltBtn');
+  b.textContent = '傾き追従 ' + (tiltOn ? 'ON' : 'OFF');
+  b.classList.toggle('on', tiltOn);
+}
+
+$('tiltBtn').addEventListener('click', () => {
+  tiltOn = !tiltOn;
+  baseQ = deviceQ ? deviceQ.clone() : null;
+  updateCameraFromDevice();
+  resetObject();
+  updateTiltBtn();
+});
+$('resetBtn').addEventListener('click', () => {
+  baseQ = deviceQ ? deviceQ.clone() : null;
+  updateCameraFromDevice();
+  resetObject();
+});
+
+// ===== タッチ操作（移動・拡大縮小・回転） =====
+const pointers = new Map();
+let gesture = null;
+
+function camAxes() {
+  const right = new THREE.Vector3(1, 0, 0).applyQuaternion(camera.quaternion);
+  const up = new THREE.Vector3(0, 1, 0).applyQuaternion(camera.quaternion);
+  return { right, up };
+}
+function unitsPerPixel() {
+  const dist = holder.position.distanceTo(camera.position);
+  return 2 * Math.tan(THREE.MathUtils.degToRad(camera.fov / 2)) * dist / innerHeight;
+}
+
+canvas.addEventListener('pointerdown', e => {
+  canvas.setPointerCapture(e.pointerId);
+  pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  gesture = null;
+});
+canvas.addEventListener('pointermove', e => {
+  if (!pointers.has(e.pointerId)) return;
+  const prev = pointers.get(e.pointerId);
+  const cur = { x: e.clientX, y: e.clientY };
+
+  if (pointers.size === 1) {
+    const k = unitsPerPixel();
+    const { right, up } = camAxes();
+    holder.position.addScaledVector(right, (cur.x - prev.x) * k);
+    holder.position.addScaledVector(up, -(cur.y - prev.y) * k);
+    pointers.set(e.pointerId, cur);
+  } else if (pointers.size === 2) {
+    pointers.set(e.pointerId, cur);
+    const [a, b] = [...pointers.values()];
+    const dist = Math.hypot(b.x - a.x, b.y - a.y);
+    const ang = Math.atan2(b.y - a.y, b.x - a.x);
+    if (gesture) {
+      const s = THREE.MathUtils.clamp(holder.scale.x * dist / gesture.dist, 0.2, 5);
+      holder.scale.setScalar(s);
+      let dA = ang - gesture.ang;
+      if (dA > Math.PI) dA -= 2 * Math.PI;
+      if (dA < -Math.PI) dA += 2 * Math.PI;
+      holder.rotateY(dA * 1.5);
+    }
+    gesture = { dist, ang };
+  }
+});
+const endPointer = e => { pointers.delete(e.pointerId); gesture = null; };
+canvas.addEventListener('pointerup', endPointer);
+canvas.addEventListener('pointercancel', endPointer);
+
+// PC用：ホイールで拡大縮小
+canvas.addEventListener('wheel', e => {
+  e.preventDefault();
+  const s = THREE.MathUtils.clamp(holder.scale.x * (e.deltaY < 0 ? 1.1 : 0.9), 0.2, 5);
+  holder.scale.setScalar(s);
+}, { passive: false });
+
+$('shapeBtn').addEventListener('click', () => {
+  shapeIndex = (shapeIndex + 1) % shapes.length;
+  setShape(shapeIndex);
+});
+
+// ===== カメラ =====
+let facing = 'environment';
+let stream = null;
+
+async function startCamera() {
+  if (stream) stream.getTracks().forEach(t => t.stop());
+  stream = await navigator.mediaDevices.getUserMedia({
+    video: { facingMode: { ideal: facing }, width: { ideal: 1920 }, height: { ideal: 1080 } },
+    audio: false
+  });
+  video.srcObject = stream;
+  await video.play();
+  const settings = stream.getVideoTracks()[0].getSettings();
+  // 前面カメラ（またはPCのWebカメラ）は鏡像で表示
+  const isFront = settings.facingMode ? settings.facingMode === 'user' : facing === 'user' || !/Android|iPhone|iPad/.test(navigator.userAgent);
+  video.classList.toggle('mirror', isFront);
+}
+
+$('flipBtn').addEventListener('click', async () => {
+  facing = facing === 'environment' ? 'user' : 'environment';
+  try { await startCamera(); } catch (_) {}
+});
+
+$('startBtn').addEventListener('click', async () => {
+  $('startMsg').textContent = '起動中…';
+  try {
+    await enableOrientation();
+    await startCamera();
+    $('start').style.display = 'none';
+    $('top').style.display = 'flex';
+    $('bottom').style.display = 'flex';
+    updateTiltBtn();
+    // 向きの初期値が届くのを少し待ってから基準を決める
+    setTimeout(() => { baseQ = deviceQ ? deviceQ.clone() : null; updateCameraFromDevice(); resetObject(); }, 300);
+    resetObject();
     renderer.setAnimationLoop(() => {
-      const t = clock.getElapsedTime();
-      knot.rotation.x = t * 0.8;
-      knot.rotation.y = t * 1.2;
-      cube.position.set(Math.cos(t * 2) * 0.32, Math.sin(t * 2) * 0.32, 0.3);
-      cube.rotation.set(t, t * 1.3, 0);
+      updateCameraFromDevice();
       renderer.render(scene, camera);
     });
   } catch (e) {
-    msg.textContent = 'カメラを起動できませんでした：' + (e.message || e);
+    $('startMsg').textContent = 'カメラを起動できませんでした：' + (e.message || e);
   }
 });
 
-// --- 撮影：カメラ映像 + 3D描画 を1枚の画像に合成 ---
+// ===== 撮影：カメラ映像 + 3D を合成 =====
 let lastBlob = null;
 
 function capture() {
-  const video = container.querySelector('video');
-  const cRect = container.getBoundingClientRect();
-  const dpr = Math.min(devicePixelRatio || 1, 2);
-
+  const W = canvas.width, H = canvas.height;   // 3D側の実ピクセル
   const out = document.createElement('canvas');
-  out.width  = Math.round(cRect.width  * dpr);
-  out.height = Math.round(cRect.height * dpr);
+  out.width = W; out.height = H;
   const ctx = out.getContext('2d');
 
-  // 画面に表示されている位置・大きさのまま描く
-  const drawAsShown = (el, src) => {
-    const r = el.getBoundingClientRect();
-    ctx.drawImage(src,
-      (r.left - cRect.left) * dpr, (r.top - cRect.top) * dpr,
-      r.width * dpr, r.height * dpr);
-  };
-
-  if (video) drawAsShown(video, video);
-
-  // 直前に描画し直してから読み取る（WebGLの描画内容が消える前に取得）
-  renderer.render(scene, camera);
-  drawAsShown(renderer.domElement, renderer.domElement);
-
+  // object-fit: cover と同じ切り抜き
+  const vw = video.videoWidth, vh = video.videoHeight;
+  if (vw && vh) {
+    const s = Math.max(W / vw, H / vh);
+    const dw = vw * s, dh = vh * s;
+    ctx.save();
+    if (video.classList.contains('mirror')) { ctx.translate(W, 0); ctx.scale(-1, 1); }
+    ctx.drawImage(video, (W - dw) / 2, (H - dh) / 2, dw, dh);
+    ctx.restore();
+  }
+  renderer.render(scene, camera);           // 描画直後に読み取る
+  ctx.drawImage(canvas, 0, 0, W, H);
   return new Promise(res => out.toBlob(res, 'image/jpeg', 0.92));
 }
 
-shutter.addEventListener('click', async () => {
-  const flash = document.getElementById('flash');
+$('shutter').addEventListener('click', async () => {
+  const flash = $('flash');
   flash.style.transition = 'none'; flash.style.opacity = '0.85';
   requestAnimationFrame(() => { flash.style.transition = 'opacity .3s'; flash.style.opacity = '0'; });
 
   lastBlob = await capture();
-  document.getElementById('photo').src = URL.createObjectURL(lastBlob);
-
+  $('photo').src = URL.createObjectURL(lastBlob);
   const file = new File([lastBlob], 'ar-photo.jpg', { type: 'image/jpeg' });
-  document.getElementById('shareBtn').style.display =
+  $('shareBtn').style.display =
     (navigator.canShare && navigator.canShare({ files: [file] })) ? 'inline-block' : 'none';
-
-  document.getElementById('preview').style.display = 'flex';
+  $('preview').style.display = 'flex';
 });
 
-document.getElementById('saveBtn').addEventListener('click', () => {
+$('saveBtn').addEventListener('click', () => {
   if (!lastBlob) return;
+  const d = new Date(), p = n => String(n).padStart(2, '0');
   const a = document.createElement('a');
-  const d = new Date();
-  const pad = n => String(n).padStart(2, '0');
-  a.download = `ar-photo_${d.getFullYear()}${pad(d.getMonth()+1)}${pad(d.getDate())}_${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}.jpg`;
+  a.download = `ar-photo_${d.getFullYear()}${p(d.getMonth()+1)}${p(d.getDate())}_${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}.jpg`;
   a.href = URL.createObjectURL(lastBlob);
   a.click();
 });
-
-document.getElementById('shareBtn').addEventListener('click', async () => {
+$('shareBtn').addEventListener('click', async () => {
   if (!lastBlob) return;
-  try {
-    await navigator.share({ files: [new File([lastBlob], 'ar-photo.jpg', { type: 'image/jpeg' })] });
-  } catch (_) { /* キャンセル時は何もしない */ }
+  try { await navigator.share({ files: [new File([lastBlob], 'ar-photo.jpg', { type: 'image/jpeg' })] }); }
+  catch (_) {}
 });
-
-document.getElementById('closeBtn').addEventListener('click', () => {
-  document.getElementById('preview').style.display = 'none';
-});
+$('closeBtn').addEventListener('click', () => { $('preview').style.display = 'none'; });
 </script>
 </body>
 </html>
