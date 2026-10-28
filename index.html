@@ -59,6 +59,7 @@
 <div id="top">
   <div id="hint">1本指：移動　ピンチ：拡大縮小<br>2本指でひねる：回転</div>
   <div id="topBtns">
+    <button class="chip on" id="objBtn">3D表示 ON</button>
     <button class="chip" id="labelBtn">名前表示 OFF</button>
     <button class="chip" id="maskBtn">人を黒塗り OFF</button>
     <button class="chip on" id="tiltBtn">傾き追従 ON</button>
@@ -213,6 +214,7 @@ function unitsPerPixel() {
   return 2 * Math.tan(THREE.MathUtils.degToRad(camera.fov / 2)) * dist / innerHeight;
 }
 canvas.addEventListener('pointerdown', e => {
+  if (!holder.visible) return;   // 非表示中は操作しない
   canvas.setPointerCapture(e.pointerId);
   pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
   gesture = null;
@@ -253,7 +255,18 @@ canvas.addEventListener('wheel', e => {
 $('shapeBtn').addEventListener('click', () => {
   shapeIndex = (shapeIndex + 1) % shapes.length;
   setShape(shapeIndex);
+  if (!holder.visible) toggleObject();   // 形を選んだら表示に戻す
 });
+
+// 3Dオブジェクトの表示 ON/OFF
+function toggleObject() {
+  holder.visible = !holder.visible;
+  const b = $('objBtn');
+  b.textContent = '3D表示 ' + (holder.visible ? 'ON' : 'OFF');
+  b.classList.toggle('on', holder.visible);
+  $('hint').style.display = holder.visible ? '' : 'none';
+}
+$('objBtn').addEventListener('click', toggleObject);
 
 // ===== 人の黒塗り（MediaPipe 人物セグメンテーション） =====
 const MP_VER = '0.10.14';
