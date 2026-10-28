@@ -8,9 +8,10 @@
   html, body { margin: 0; height: 100%; background: #000; color: #fff; overflow: hidden;
     font-family: system-ui, -apple-system, "Hiragino Sans", sans-serif;
     -webkit-user-select: none; user-select: none; }
-  #video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
-  #video.mirror { transform: scaleX(-1); }
-  #gl { position: absolute; inset: 0; width: 100%; height: 100%; touch-action: none; }
+  /* video は解析用。表示は #bg キャンバスに描く */
+  #video { position: absolute; left: 0; top: 0; width: 2px; height: 2px; opacity: 0; pointer-events: none; }
+  #bg, #gl { position: absolute; inset: 0; width: 100%; height: 100%; }
+  #gl { touch-action: none; }
 
   button { font: inherit; border: 0; cursor: pointer; color: #fff; }
   .chip { background: rgba(0,0,0,.5); padding: 8px 14px; border-radius: 999px; font-size: 14px; }
@@ -52,11 +53,13 @@
 </head>
 <body>
 <video id="video" playsinline muted autoplay></video>
+<canvas id="bg"></canvas>
 <canvas id="gl"></canvas>
 
 <div id="top">
   <div id="hint">1本指：移動　ピンチ：拡大縮小<br>2本指でひねる：回転</div>
   <div id="topBtns">
+    <button class="chip" id="maskBtn">人を黒塗り OFF</button>
     <button class="chip on" id="tiltBtn">傾き追従 ON</button>
     <button class="chip" id="resetBtn">位置リセット</button>
   </div>
@@ -90,6 +93,8 @@ import * as THREE from 'three';
 
 const $ = id => document.getElementById(id);
 const video = $('video');
+const bg = $('bg');
+const bgCtx = bg.getContext('2d');
 const canvas = $('gl');
 
 // ===== three.js =====
@@ -105,7 +110,6 @@ const dir = new THREE.DirectionalLight(0xffffff, 1.6);
 dir.position.set(2, 3, 4);
 scene.add(dir);
 
-// 置くオブジェクト（holder を動かし、中身を差し替える）
 const holder = new THREE.Group();
 scene.add(holder);
 
@@ -128,7 +132,7 @@ function setShape(i) {
 }
 setShape(0);
 
-const DIST = 4; // カメラからの初期距離
+const DIST = 4;
 function resetObject() {
   holder.position.copy(new THREE.Vector3(0, 0, -DIST).applyQuaternion(camera.quaternion));
   holder.scale.setScalar(1);
@@ -138,16 +142,16 @@ function resetObject() {
 function resize() {
   const w = innerWidth, h = innerHeight;
   renderer.setSize(w, h, false);
+  bg.width = canvas.width; bg.height = canvas.height;   // 3Dと同じ解像度
   camera.aspect = w / h;
   camera.updateProjectionMatrix();
 }
 addEventListener('resize', resize);
 resize();
 
-// ===== 傾き追従（デバイスの向きでカメラを回す＝3Dがその場に残って見える） =====
+// ===== 傾き追従 =====
 let tiltOn = true;
-let baseQ = null;         // 起動時（リセット時）の向き
-let deviceQ = null;       // 現在の向き
+let baseQ = null, deviceQ = null;
 const zee = new THREE.Vector3(0, 0, 1);
 const euler = new THREE.Euler();
 const q0 = new THREE.Quaternion();
@@ -165,7 +169,6 @@ function onOrientation(e) {
   deviceQ = q;
   if (!baseQ) baseQ = q.clone();
 }
-
 async function enableOrientation() {
   try {
     if (typeof DeviceOrientationEvent !== 'undefined' &&
@@ -174,53 +177,40 @@ async function enableOrientation() {
       if (r !== 'granted') throw new Error('denied');
     }
     addEventListener('deviceorientation', onOrientation);
-  } catch (_) {
-    tiltOn = false;
-    updateTiltBtn();
-  }
+  } catch (_) { tiltOn = false; updateTiltBtn(); }
 }
-
 function updateCameraFromDevice() {
-  if (tiltOn && deviceQ && baseQ) {
-    camera.quaternion.copy(baseQ.clone().invert().multiply(deviceQ));
-  } else {
-    camera.quaternion.identity();
-  }
+  if (tiltOn && deviceQ && baseQ) camera.quaternion.copy(baseQ.clone().invert().multiply(deviceQ));
+  else camera.quaternion.identity();
 }
-
 function updateTiltBtn() {
   const b = $('tiltBtn');
   b.textContent = '傾き追従 ' + (tiltOn ? 'ON' : 'OFF');
   b.classList.toggle('on', tiltOn);
 }
-
 $('tiltBtn').addEventListener('click', () => {
   tiltOn = !tiltOn;
   baseQ = deviceQ ? deviceQ.clone() : null;
-  updateCameraFromDevice();
-  resetObject();
-  updateTiltBtn();
+  updateCameraFromDevice(); resetObject(); updateTiltBtn();
 });
 $('resetBtn').addEventListener('click', () => {
   baseQ = deviceQ ? deviceQ.clone() : null;
-  updateCameraFromDevice();
-  resetObject();
+  updateCameraFromDevice(); resetObject();
 });
 
-// ===== タッチ操作（移動・拡大縮小・回転） =====
+// ===== タッチ操作 =====
 const pointers = new Map();
 let gesture = null;
-
 function camAxes() {
-  const right = new THREE.Vector3(1, 0, 0).applyQuaternion(camera.quaternion);
-  const up = new THREE.Vector3(0, 1, 0).applyQuaternion(camera.quaternion);
-  return { right, up };
+  return {
+    right: new THREE.Vector3(1, 0, 0).applyQuaternion(camera.quaternion),
+    up: new THREE.Vector3(0, 1, 0).applyQuaternion(camera.quaternion)
+  };
 }
 function unitsPerPixel() {
   const dist = holder.position.distanceTo(camera.position);
   return 2 * Math.tan(THREE.MathUtils.degToRad(camera.fov / 2)) * dist / innerHeight;
 }
-
 canvas.addEventListener('pointerdown', e => {
   canvas.setPointerCapture(e.pointerId);
   pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
@@ -230,7 +220,6 @@ canvas.addEventListener('pointermove', e => {
   if (!pointers.has(e.pointerId)) return;
   const prev = pointers.get(e.pointerId);
   const cur = { x: e.clientX, y: e.clientY };
-
   if (pointers.size === 1) {
     const k = unitsPerPixel();
     const { right, up } = camAxes();
@@ -243,8 +232,7 @@ canvas.addEventListener('pointermove', e => {
     const dist = Math.hypot(b.x - a.x, b.y - a.y);
     const ang = Math.atan2(b.y - a.y, b.x - a.x);
     if (gesture) {
-      const s = THREE.MathUtils.clamp(holder.scale.x * dist / gesture.dist, 0.2, 5);
-      holder.scale.setScalar(s);
+      holder.scale.setScalar(THREE.MathUtils.clamp(holder.scale.x * dist / gesture.dist, 0.2, 5));
       let dA = ang - gesture.ang;
       if (dA > Math.PI) dA -= 2 * Math.PI;
       if (dA < -Math.PI) dA += 2 * Math.PI;
@@ -256,12 +244,9 @@ canvas.addEventListener('pointermove', e => {
 const endPointer = e => { pointers.delete(e.pointerId); gesture = null; };
 canvas.addEventListener('pointerup', endPointer);
 canvas.addEventListener('pointercancel', endPointer);
-
-// PC用：ホイールで拡大縮小
 canvas.addEventListener('wheel', e => {
   e.preventDefault();
-  const s = THREE.MathUtils.clamp(holder.scale.x * (e.deltaY < 0 ? 1.1 : 0.9), 0.2, 5);
-  holder.scale.setScalar(s);
+  holder.scale.setScalar(THREE.MathUtils.clamp(holder.scale.x * (e.deltaY < 0 ? 1.1 : 0.9), 0.2, 5));
 }, { passive: false });
 
 $('shapeBtn').addEventListener('click', () => {
@@ -269,28 +254,125 @@ $('shapeBtn').addEventListener('click', () => {
   setShape(shapeIndex);
 });
 
+// ===== 人の黒塗り（MediaPipe 人物セグメンテーション） =====
+const MP_VER = '0.10.14';
+let segmenter = null, segLoading = false;
+let maskOn = false;
+const small = document.createElement('canvas');      // 解析用の縮小フレーム
+const smallCtx = small.getContext('2d', { willReadFrequently: true });
+const maskCanvas = document.createElement('canvas'); // 黒塗りマスク
+const maskCtx = maskCanvas.getContext('2d');
+let maskReady = false;
+let lastVideoTime = -1;
+
+async function loadSegmenter() {
+  segLoading = true;
+  const { FilesetResolver, ImageSegmenter } =
+    await import(`https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@${MP_VER}/vision_bundle.mjs`);
+  const fileset = await FilesetResolver.forVisionTasks(
+    `https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@${MP_VER}/wasm`);
+  const opts = delegate => ({
+    baseOptions: {
+      modelAssetPath: 'https://storage.googleapis.com/mediapipe-models/image_segmenter/selfie_segmenter/float16/latest/selfie_segmenter.tflite',
+      delegate
+    },
+    runningMode: 'VIDEO',
+    outputCategoryMask: false,
+    outputConfidenceMasks: true
+  });
+  try { segmenter = await ImageSegmenter.createFromOptions(fileset, opts('GPU')); }
+  catch (_) { segmenter = await ImageSegmenter.createFromOptions(fileset, opts('CPU')); }
+  segLoading = false;
+}
+
+function updateMaskBtn(text) {
+  const b = $('maskBtn');
+  b.textContent = text || ('人を黒塗り ' + (maskOn ? 'ON' : 'OFF'));
+  b.classList.toggle('on', maskOn);
+}
+$('maskBtn').addEventListener('click', async () => {
+  if (segLoading) return;
+  if (!segmenter) {
+    updateMaskBtn('読み込み中…');
+    try { await loadSegmenter(); }
+    catch (e) { segLoading = false; updateMaskBtn('黒塗り 読込失敗'); return; }
+  }
+  maskOn = !maskOn;
+  maskReady = false;
+  updateMaskBtn();
+});
+
+function segmentFrame() {
+  if (!segmenter || video.readyState < 2 || video.currentTime === lastVideoTime) return;
+  lastVideoTime = video.currentTime;
+  const vw = video.videoWidth, vh = video.videoHeight;
+  const sw = 256, sh = Math.round(256 * vh / vw);
+  if (small.width !== sw || small.height !== sh) { small.width = sw; small.height = sh; }
+  smallCtx.drawImage(video, 0, 0, sw, sh);
+
+  segmenter.segmentForVideo(small, performance.now(), result => {
+    const m = result.confidenceMasks && result.confidenceMasks[0];
+    if (!m) return;
+    const w = m.width, h = m.height, conf = m.getAsFloat32Array();
+    if (maskCanvas.width !== w || maskCanvas.height !== h) { maskCanvas.width = w; maskCanvas.height = h; }
+    const img = maskCtx.createImageData(w, h);
+    const d = img.data;
+    for (let i = 0; i < conf.length; i++) {
+      // 少し低めのしきい値で、人の輪郭まで確実に覆う
+      d[i * 4 + 3] = conf[i] > 0.25 ? 255 : 0;   // RGB は 0（黒）
+    }
+    maskCtx.putImageData(img, 0, 0);
+    maskReady = true;
+  });
+}
+
 // ===== カメラ =====
 let facing = 'environment';
 let stream = null;
+let mirror = false;
 
 async function startCamera() {
   if (stream) stream.getTracks().forEach(t => t.stop());
   stream = await navigator.mediaDevices.getUserMedia({
-    video: { facingMode: { ideal: facing }, width: { ideal: 1920 }, height: { ideal: 1080 } },
+    video: { facingMode: { ideal: facing }, width: { ideal: 1280 }, height: { ideal: 720 } },
     audio: false
   });
   video.srcObject = stream;
   await video.play();
-  const settings = stream.getVideoTracks()[0].getSettings();
-  // 前面カメラ（またはPCのWebカメラ）は鏡像で表示
-  const isFront = settings.facingMode ? settings.facingMode === 'user' : facing === 'user' || !/Android|iPhone|iPad/.test(navigator.userAgent);
-  video.classList.toggle('mirror', isFront);
+  const s = stream.getVideoTracks()[0].getSettings();
+  mirror = s.facingMode ? s.facingMode === 'user'
+                        : (facing === 'user' || !/Android|iPhone|iPad/.test(navigator.userAgent));
+  lastVideoTime = -1;
+  maskReady = false;
 }
-
 $('flipBtn').addEventListener('click', async () => {
   facing = facing === 'environment' ? 'user' : 'environment';
   try { await startCamera(); } catch (_) {}
 });
+
+// object-fit: cover と同じ切り抜きで描画（鏡像にも対応）
+function drawCover(ctx, src, sw, sh, W, H) {
+  const s = Math.max(W / sw, H / sh);
+  const dw = sw * s, dh = sh * s;
+  ctx.save();
+  if (mirror) { ctx.translate(W, 0); ctx.scale(-1, 1); }
+  ctx.drawImage(src, (W - dw) / 2, (H - dh) / 2, dw, dh);
+  ctx.restore();
+}
+
+function drawBackground() {
+  const W = bg.width, H = bg.height;
+  const vw = video.videoWidth, vh = video.videoHeight;
+  if (!vw || !vh) return;
+  drawCover(bgCtx, video, vw, vh, W, H);
+  if (maskOn) {
+    segmentFrame();
+    if (maskReady) {
+      bgCtx.imageSmoothingEnabled = true;
+      drawCover(bgCtx, maskCanvas, maskCanvas.width, maskCanvas.height, W, H);
+    }
+  }
+}
 
 $('startBtn').addEventListener('click', async () => {
   $('startMsg').textContent = '起動中…';
@@ -301,10 +383,10 @@ $('startBtn').addEventListener('click', async () => {
     $('top').style.display = 'flex';
     $('bottom').style.display = 'flex';
     updateTiltBtn();
-    // 向きの初期値が届くのを少し待ってから基準を決める
     setTimeout(() => { baseQ = deviceQ ? deviceQ.clone() : null; updateCameraFromDevice(); resetObject(); }, 300);
     resetObject();
     renderer.setAnimationLoop(() => {
+      drawBackground();
       updateCameraFromDevice();
       renderer.render(scene, camera);
     });
@@ -313,26 +395,16 @@ $('startBtn').addEventListener('click', async () => {
   }
 });
 
-// ===== 撮影：カメラ映像 + 3D を合成 =====
+// ===== 撮影：画面に見えている背景（黒塗り込み）+ 3D を合成 =====
 let lastBlob = null;
-
 function capture() {
-  const W = canvas.width, H = canvas.height;   // 3D側の実ピクセル
+  const W = canvas.width, H = canvas.height;
   const out = document.createElement('canvas');
   out.width = W; out.height = H;
   const ctx = out.getContext('2d');
-
-  // object-fit: cover と同じ切り抜き
-  const vw = video.videoWidth, vh = video.videoHeight;
-  if (vw && vh) {
-    const s = Math.max(W / vw, H / vh);
-    const dw = vw * s, dh = vh * s;
-    ctx.save();
-    if (video.classList.contains('mirror')) { ctx.translate(W, 0); ctx.scale(-1, 1); }
-    ctx.drawImage(video, (W - dw) / 2, (H - dh) / 2, dw, dh);
-    ctx.restore();
-  }
-  renderer.render(scene, camera);           // 描画直後に読み取る
+  drawBackground();
+  ctx.drawImage(bg, 0, 0, W, H);
+  renderer.render(scene, camera);
   ctx.drawImage(canvas, 0, 0, W, H);
   return new Promise(res => out.toBlob(res, 'image/jpeg', 0.92));
 }
@@ -341,7 +413,6 @@ $('shutter').addEventListener('click', async () => {
   const flash = $('flash');
   flash.style.transition = 'none'; flash.style.opacity = '0.85';
   requestAnimationFrame(() => { flash.style.transition = 'opacity .3s'; flash.style.opacity = '0'; });
-
   lastBlob = await capture();
   $('photo').src = URL.createObjectURL(lastBlob);
   const file = new File([lastBlob], 'ar-photo.jpg', { type: 'image/jpeg' });
@@ -349,7 +420,6 @@ $('shutter').addEventListener('click', async () => {
     (navigator.canShare && navigator.canShare({ files: [file] })) ? 'inline-block' : 'none';
   $('preview').style.display = 'flex';
 });
-
 $('saveBtn').addEventListener('click', () => {
   if (!lastBlob) return;
   const d = new Date(), p = n => String(n).padStart(2, '0');
