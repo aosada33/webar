@@ -58,10 +58,9 @@ if (!('xr' in navigator)) {
 }
 
 // ARボタン（hit-test = 現実の平面検出 を要求）
+// ※ dom-overlay は端末によって3D描画が表示されなくなるため使わない
 document.body.appendChild(ARButton.createButton(renderer, {
-  requiredFeatures: ['hit-test'],
-  optionalFeatures: ['dom-overlay'],
-  domOverlay: { root: document.getElementById('info') }
+  requiredFeatures: ['hit-test']
 }));
 
 // --- 照準リング（床の検出位置を示す） ---
@@ -95,7 +94,17 @@ let hitTestSource = null;
 let hitTestRequested = false;
 let everHit = false;
 
-renderer.xr.addEventListener('sessionstart', () => setStatus('AR開始：床の検出を準備中…'));
+renderer.xr.addEventListener('sessionstart', () => {
+  // AR中はページ背景を透明に（カメラ映像との合成を妨げないように）
+  document.documentElement.style.background = 'transparent';
+  document.body.style.background = 'transparent';
+  scene.background = null;
+  setStatus('AR開始：床の検出を準備中…');
+});
+renderer.xr.addEventListener('sessionend', () => {
+  document.documentElement.style.background = '';
+  document.body.style.background = '';
+});
 
 renderer.setAnimationLoop((time, frame) => {
   if (frame) {
