@@ -62,6 +62,7 @@
     <button class="chip" id="objBtn">3D表示 OFF</button>
     <button class="chip" id="labelBtn">名前表示 OFF</button>
     <button class="chip" id="maskBtn">人を黒塗り OFF</button>
+    <button class="chip" id="bgBtn" style="display:none">背景 そのまま</button>
     <button class="chip on" id="tiltBtn" style="display:none">傾き追従 ON</button>
     <button class="chip" id="resetBtn" style="display:none">位置リセット</button>
   </div>
@@ -281,8 +282,35 @@ const small = document.createElement('canvas');      // 解析用の縮小フレ
 const smallCtx = small.getContext('2d', { willReadFrequently: true });
 const maskCanvas = document.createElement('canvas'); // 黒塗りマスク
 const maskCtx = maskCanvas.getContext('2d');
+const softCanvas = document.createElement('canvas'); // 背景変更用（輪郭なめらか）
+const softCtx = softCanvas.getContext('2d');
 let maskReady = false;
 let lastVideoTime = -1;
+
+// ===== 背景変更（インカメラ時のみ）：none / green / blur =====
+const BG_MODES = ['none', 'green', 'blur'];
+const BG_LABEL = { none: '背景 そのまま', green: '背景 グリーン', blur: '背景 ぼかし' };
+let bgMode = 'none';
+const personCanvas = document.createElement('canvas'); // 人だけ切り抜いた映像
+const personCtx = personCanvas.getContext('2d');
+const blurCanvas = document.createElement('canvas');   // ぼかし用の極小フレーム
+const blurCtx = blurCanvas.getContext('2d');
+
+function updateBgBtn(text) {
+  const b = $('bgBtn');
+  b.textContent = text || BG_LABEL[bgMode];
+  b.classList.toggle('on', bgMode !== 'none');
+  b.style.display = mirror ? '' : 'none';   // インカメラ（鏡像表示）のときだけ出す
+}
+$('bgBtn').addEventListener('click', async () => {
+  if (!segmenter) {
+    updateBgBtn('読み込み中…');
+    try { await ensureSegmenter(); }
+    catch (e) { updateBgBtn('背景 読込失敗'); return; }
+  }
+  bgMode = BG_MODES[(BG_MODES.indexOf(bgMode) + 1) % BG_MODES.length];
+  updateBgBtn();
+});
 
 // MediaPipe 本体の読み込み（黒塗り・名前表示で共用）
 let visionLib = null, fileset = null;
@@ -317,12 +345,18 @@ function updateMaskBtn(text) {
   b.textContent = text || ('人を黒塗り ' + (maskOn ? 'ON' : 'OFF'));
   b.classList.toggle('on', maskOn);
 }
+// 黒塗り・背景変更で共用する読み込み（同時に押されても1回だけ読む）
+let segPromise = null;
+function ensureSegmenter() {
+  if (!segPromise) segPromise = loadSegmenter().catch(e => { segPromise = null; segLoading = false; throw e; });
+  return segPromise;
+}
+
 $('maskBtn').addEventListener('click', async () => {
-  if (segLoading) return;
   if (!segmenter) {
     updateMaskBtn('読み込み中…');
-    try { await loadSegmenter(); }
-    catch (e) { segLoading = false; updateMaskBtn('黒塗り 読込失敗'); return; }
+    try { await ensureSegmenter(); }
+    catch (e) { updateMaskBtn('黒塗り 読込失敗'); return; }
   }
   maskOn = !maskOn;
   maskReady = false;
@@ -342,13 +376,19 @@ function segmentFrame() {
     if (!m) return;
     const w = m.width, h = m.height, conf = m.getAsFloat32Array();
     if (maskCanvas.width !== w || maskCanvas.height !== h) { maskCanvas.width = w; maskCanvas.height = h; }
+    if (softCanvas.width !== w || softCanvas.height !== h) { softCanvas.width = w; softCanvas.height = h; }
     const img = maskCtx.createImageData(w, h);
-    const d = img.data;
+    const soft = softCtx.createImageData(w, h);
+    const d = img.data, sd = soft.data;
     for (let i = 0; i < conf.length; i++) {
-      // 少し低めのしきい値で、人の輪郭まで確実に覆う
+      // 黒塗り用：少し低めのしきい値で、人の輪郭まで確実に覆う
       d[i * 4 + 3] = conf[i] > 0.25 ? 255 : 0;   // RGB は 0（黒）
+      // 背景変更用：輪郭をなめらかにするため、確信度に応じて半透明に
+      const a = Math.min(1, Math.max(0, (conf[i] - 0.3) / 0.4));
+      sd[i * 4 + 3] = a * 255;
     }
     maskCtx.putImageData(img, 0, 0);
+    softCtx.putImageData(soft, 0, 0);
     maskReady = true;
   });
 }
@@ -463,6 +503,7 @@ async function startCamera() {
                         : (facing === 'user' || !/Android|iPhone|iPad/.test(navigator.userAgent));
   lastVideoTime = -1;
   maskReady = false;
+  updateBgBtn();
 }
 $('flipBtn').addEventListener('click', async () => {
   facing = facing === 'environment' ? 'user' : 'environment';
@@ -483,9 +524,39 @@ function drawBackground() {
   const W = bg.width, H = bg.height;
   const vw = video.videoWidth, vh = video.videoHeight;
   if (!vw || !vh) return;
-  drawCover(bgCtx, video, vw, vh, W, H);
+
+  const bgActive = mirror && bgMode !== 'none';
+  if (maskOn || bgActive) segmentFrame();
+
+  if (bgActive && maskReady) {
+    // 1) 背景を描く
+    if (bgMode === 'green') {
+      bgCtx.fillStyle = '#00b140';
+      bgCtx.fillRect(0, 0, W, H);
+    } else {
+      // 極小に縮めてから拡大 → どのブラウザでも効くぼかし
+      const bw = 40, bh = Math.max(1, Math.round(40 * vh / vw));
+      if (blurCanvas.width !== bw || blurCanvas.height !== bh) { blurCanvas.width = bw; blurCanvas.height = bh; }
+      blurCtx.drawImage(video, 0, 0, bw, bh);
+      bgCtx.imageSmoothingEnabled = true;
+      bgCtx.imageSmoothingQuality = 'high';
+      drawCover(bgCtx, blurCanvas, bw, bh, W, H);
+    }
+    // 2) 人だけを切り抜いて上に重ねる
+    if (personCanvas.width !== W || personCanvas.height !== H) { personCanvas.width = W; personCanvas.height = H; }
+    personCtx.globalCompositeOperation = 'source-over';
+    personCtx.clearRect(0, 0, W, H);
+    drawCover(personCtx, video, vw, vh, W, H);
+    personCtx.globalCompositeOperation = 'destination-in';
+    personCtx.imageSmoothingEnabled = true;
+    drawCover(personCtx, softCanvas, softCanvas.width, softCanvas.height, W, H);
+    personCtx.globalCompositeOperation = 'source-over';
+    bgCtx.drawImage(personCanvas, 0, 0);
+  } else {
+    drawCover(bgCtx, video, vw, vh, W, H);
+  }
+
   if (maskOn) {
-    segmentFrame();
     if (maskReady) {
       bgCtx.imageSmoothingEnabled = true;
       drawCover(bgCtx, maskCanvas, maskCanvas.width, maskCanvas.height, W, H);
