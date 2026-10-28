@@ -87,9 +87,15 @@ controller.addEventListener('select', () => {
 });
 scene.add(controller);
 
+// --- 状態表示（原因の切り分け用） ---
+const setStatus = t => { msg.textContent = t; };
+
 // --- hit-test ---
 let hitTestSource = null;
 let hitTestRequested = false;
+let everHit = false;
+
+renderer.xr.addEventListener('sessionstart', () => setStatus('AR開始：床の検出を準備中…'));
 
 renderer.setAnimationLoop((time, frame) => {
   if (frame) {
@@ -97,18 +103,31 @@ renderer.setAnimationLoop((time, frame) => {
     const session = renderer.xr.getSession();
 
     if (!hitTestRequested) {
-      session.requestReferenceSpace('viewer').then(viewerSpace => {
-        session.requestHitTestSource({ space: viewerSpace }).then(src => { hitTestSource = src; });
-      });
-      session.addEventListener('end', () => { hitTestRequested = false; hitTestSource = null; });
       hitTestRequested = true;
+      session.requestReferenceSpace('viewer').then(viewerSpace => {
+        // 平面だけでなく特徴点も対象にして、検出されやすくする
+        const opts = { space: viewerSpace, entityTypes: ['plane', 'point'] };
+        return session.requestHitTestSource(opts)
+          .catch(() => session.requestHitTestSource({ space: viewerSpace }));
+      }).then(src => {
+        hitTestSource = src;
+        setStatus('床を探しています…スマホをゆっくり左右に動かしてください');
+      }).catch(err => {
+        setStatus('hit-testの開始に失敗：' + err.message);
+      });
+      session.addEventListener('end', () => {
+        hitTestRequested = false; hitTestSource = null; everHit = false;
+        setStatus('');
+      });
     }
 
     if (hitTestSource) {
       const hits = frame.getHitTestResults(hitTestSource);
-      if (hits.length) {
+      const pose = hits.length ? hits[0].getPose(refSpace) : null;
+      if (pose) {
         reticle.visible = true;
-        reticle.matrix.fromArray(hits[0].getPose(refSpace).transform.matrix);
+        reticle.matrix.fromArray(pose.transform.matrix);
+        if (!everHit) { everHit = true; setStatus('床を検出しました。タップで配置できます'); }
       } else {
         reticle.visible = false;
       }
