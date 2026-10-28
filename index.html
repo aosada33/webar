@@ -57,18 +57,18 @@
 <canvas id="gl"></canvas>
 
 <div id="top">
-  <div id="hint">1本指：移動　ピンチ：拡大縮小<br>2本指でひねる：回転</div>
+  <div id="hint" style="display:none">1本指：移動　ピンチ：拡大縮小<br>2本指でひねる：回転</div>
   <div id="topBtns">
-    <button class="chip on" id="objBtn">3D表示 ON</button>
+    <button class="chip" id="objBtn">3D表示 OFF</button>
     <button class="chip" id="labelBtn">名前表示 OFF</button>
     <button class="chip" id="maskBtn">人を黒塗り OFF</button>
-    <button class="chip on" id="tiltBtn">傾き追従 ON</button>
-    <button class="chip" id="resetBtn">位置リセット</button>
+    <button class="chip on" id="tiltBtn" style="display:none">傾き追従 ON</button>
+    <button class="chip" id="resetBtn" style="display:none">位置リセット</button>
   </div>
 </div>
 
 <div id="bottom">
-  <button class="round" id="shapeBtn" aria-label="オブジェクト切替">◆</button>
+  <button class="round" id="shapeBtn" aria-label="オブジェクト切替" style="visibility:hidden">◆</button>
   <button id="shutter" aria-label="撮影"></button>
   <button class="round" id="flipBtn" aria-label="カメラ切替">⟲</button>
 </div>
@@ -113,6 +113,7 @@ dir.position.set(2, 3, 4);
 scene.add(dir);
 
 const holder = new THREE.Group();
+holder.visible = false;   // 3Dは最初は非表示
 scene.add(holder);
 
 const shapes = [
@@ -265,6 +266,10 @@ function toggleObject() {
   b.textContent = '3D表示 ' + (holder.visible ? 'ON' : 'OFF');
   b.classList.toggle('on', holder.visible);
   $('hint').style.display = holder.visible ? '' : 'none';
+  // ◆ボタンは3D表示中だけ出す（非表示でも場所は確保して撮影ボタンを中央に保つ）
+  $('shapeBtn').style.visibility = holder.visible ? 'visible' : 'hidden';
+  $('resetBtn').style.display = holder.visible ? '' : 'none';
+  $('tiltBtn').style.display = holder.visible ? '' : 'none';
 }
 $('objBtn').addEventListener('click', toggleObject);
 
