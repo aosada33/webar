@@ -59,6 +59,7 @@
 <div id="top">
   <div id="hint">1本指：移動　ピンチ：拡大縮小<br>2本指でひねる：回転</div>
   <div id="topBtns">
+    <button class="chip" id="labelBtn">名前表示 OFF</button>
     <button class="chip" id="maskBtn">人を黒塗り OFF</button>
     <button class="chip on" id="tiltBtn">傾き追従 ON</button>
     <button class="chip" id="resetBtn">位置リセット</button>
@@ -265,12 +266,20 @@ const maskCtx = maskCanvas.getContext('2d');
 let maskReady = false;
 let lastVideoTime = -1;
 
+// MediaPipe 本体の読み込み（黒塗り・名前表示で共用）
+let visionLib = null, fileset = null;
+async function loadVision() {
+  if (!visionLib) {
+    visionLib = await import(`https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@${MP_VER}/vision_bundle.mjs`);
+    fileset = await visionLib.FilesetResolver.forVisionTasks(
+      `https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@${MP_VER}/wasm`);
+  }
+  return { ...visionLib, fileset };
+}
+
 async function loadSegmenter() {
   segLoading = true;
-  const { FilesetResolver, ImageSegmenter } =
-    await import(`https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@${MP_VER}/vision_bundle.mjs`);
-  const fileset = await FilesetResolver.forVisionTasks(
-    `https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@${MP_VER}/wasm`);
+  const { ImageSegmenter } = await loadVision();
   const opts = delegate => ({
     baseOptions: {
       modelAssetPath: 'https://storage.googleapis.com/mediapipe-models/image_segmenter/selfie_segmenter/float16/latest/selfie_segmenter.tflite',
@@ -326,6 +335,98 @@ function segmentFrame() {
   });
 }
 
+// ===== 名前表示（MediaPipe 物体検出 / COCO 80種類） =====
+const JA = {
+  'person': '人', 'laptop': 'ノートPC', 'tv': 'モニター', 'keyboard': 'キーボード',
+  'mouse': 'マウス', 'chair': '椅子', 'dining table': '机', 'cell phone': 'スマホ',
+  'cup': 'カップ', 'bottle': 'ボトル', 'book': '本', 'potted plant': '観葉植物',
+  'couch': 'ソファ', 'clock': '時計', 'backpack': 'リュック', 'handbag': 'バッグ',
+  'remote': 'リモコン', 'scissors': 'はさみ', 'umbrella': '傘', 'refrigerator': '冷蔵庫',
+  'microwave': '電子レンジ', 'sink': 'シンク', 'vase': '花瓶', 'tie': 'ネクタイ',
+  'wine glass': 'グラス', 'bowl': 'ボウル', 'suitcase': 'スーツケース', 'bench': 'ベンチ',
+  'oven': 'オーブン', 'toaster': 'トースター', 'bed': 'ベッド', 'teddy bear': 'ぬいぐるみ'
+};
+let detector = null, detLoading = false, labelOn = false;
+let detections = [], detFrameW = 1, detFrameH = 1, lastDetAt = 0;
+const detCanvas = document.createElement('canvas');
+const detCtx = detCanvas.getContext('2d');
+
+async function loadDetector() {
+  detLoading = true;
+  const { ObjectDetector } = await loadVision();
+  const opts = delegate => ({
+    baseOptions: {
+      modelAssetPath: 'https://storage.googleapis.com/mediapipe-models/object_detector/efficientdet_lite0/float16/1/efficientdet_lite0.tflite',
+      delegate
+    },
+    runningMode: 'VIDEO',
+    scoreThreshold: 0.35,
+    maxResults: 15
+  });
+  try { detector = await ObjectDetector.createFromOptions(fileset, opts('GPU')); }
+  catch (_) { detector = await ObjectDetector.createFromOptions(fileset, opts('CPU')); }
+  detLoading = false;
+}
+
+function updateLabelBtn(text) {
+  const b = $('labelBtn');
+  b.textContent = text || ('名前表示 ' + (labelOn ? 'ON' : 'OFF'));
+  b.classList.toggle('on', labelOn);
+}
+$('labelBtn').addEventListener('click', async () => {
+  if (detLoading) return;
+  if (!detector) {
+    updateLabelBtn('読み込み中…');
+    try { await loadDetector(); }
+    catch (e) { detLoading = false; updateLabelBtn('名前表示 読込失敗'); return; }
+  }
+  labelOn = !labelOn;
+  detections = [];
+  updateLabelBtn();
+});
+
+function detectFrame() {
+  const now = performance.now();
+  if (!detector || video.readyState < 2 || now - lastDetAt < 150) return; // 約7回/秒
+  lastDetAt = now;
+  const vw = video.videoWidth, vh = video.videoHeight;
+  const dw = 480, dh = Math.round(480 * vh / vw);
+  if (detCanvas.width !== dw || detCanvas.height !== dh) { detCanvas.width = dw; detCanvas.height = dh; }
+  detCtx.drawImage(video, 0, 0, dw, dh);
+  const res = detector.detectForVideo(detCanvas, now);
+  detections = res.detections || [];
+  detFrameW = dw; detFrameH = dh;
+}
+
+function drawLabels(ctx, W, H) {
+  const s = Math.max(W / detFrameW, H / detFrameH);
+  const ox = (W - detFrameW * s) / 2, oy = (H - detFrameH * s) / 2;
+  const scale = Math.min(devicePixelRatio || 1, 2);
+  const fs = Math.round(15 * scale);
+  ctx.save();
+  ctx.lineWidth = 3 * scale;
+  ctx.font = `bold ${fs}px system-ui, "Hiragino Sans", sans-serif`;
+  ctx.textBaseline = 'top';
+  for (const d of detections) {
+    const b = d.boundingBox, c = d.categories[0];
+    if (!b || !c) continue;
+    let x = ox + b.originX * s;
+    const y = oy + b.originY * s, w = b.width * s, h = b.height * s;
+    if (mirror) x = W - x - w;
+    ctx.strokeStyle = '#7fd4ff';
+    ctx.strokeRect(x, y, w, h);
+    const label = `${JA[c.categoryName] || c.categoryName} ${Math.round(c.score * 100)}%`;
+    const tw = ctx.measureText(label).width + 12 * scale;
+    const th = fs + 8 * scale;
+    const ty = y - th < 0 ? y : y - th;
+    ctx.fillStyle = '#7fd4ff';
+    ctx.fillRect(x - ctx.lineWidth / 2, ty, tw, th);
+    ctx.fillStyle = '#002233';
+    ctx.fillText(label, x + 6 * scale - ctx.lineWidth / 2, ty + 4 * scale);
+  }
+  ctx.restore();
+}
+
 // ===== カメラ =====
 let facing = 'environment';
 let stream = null;
@@ -371,6 +472,10 @@ function drawBackground() {
       bgCtx.imageSmoothingEnabled = true;
       drawCover(bgCtx, maskCanvas, maskCanvas.width, maskCanvas.height, W, H);
     }
+  }
+  if (labelOn) {
+    detectFrame();
+    drawLabels(bgCtx, W, H);
   }
 }
 
