@@ -3,316 +3,113 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
-<title>ARカメラ サンプル</title>
+<title>チュロス判定カメラ</title>
 <style>
   html, body { margin: 0; height: 100%; background: #000; color: #fff; overflow: hidden;
     font-family: system-ui, -apple-system, "Hiragino Sans", sans-serif;
     -webkit-user-select: none; user-select: none; }
-  /* video は解析用。表示は #bg キャンバスに描く */
   #video { position: absolute; left: 0; top: 0; width: 2px; height: 2px; opacity: 0; pointer-events: none; }
-  #bg, #gl { position: absolute; inset: 0; width: 100%; height: 100%; }
-  #gl { touch-action: none; }
-
+  #view { position: absolute; inset: 0; width: 100%; height: 100%; }
   button { font: inherit; border: 0; cursor: pointer; color: #fff; }
-  .chip { background: rgba(0,0,0,.5); padding: 8px 14px; border-radius: 999px; font-size: 14px; }
+  .chip { background: rgba(0,0,0,.55); padding: 8px 14px; border-radius: 999px; font-size: 14px; }
   .chip.on { background: #7fd4ff; color: #002233; }
 
   #top { position: absolute; top: 12px; left: 12px; right: 12px; display: none;
-    justify-content: space-between; align-items: flex-start; gap: 8px; z-index: 10; pointer-events: none; }
-  #top > * { pointer-events: auto; }
-  #hint { font-size: 13px; line-height: 1.5; background: rgba(0,0,0,.45);
-    padding: 6px 12px; border-radius: 12px; pointer-events: none !important; }
+    justify-content: space-between; align-items: flex-start; gap: 8px; z-index: 10; }
+  #stats { font-size: 12px; line-height: 1.6; background: rgba(0,0,0,.55);
+    padding: 6px 10px; border-radius: 10px; font-variant-numeric: tabular-nums; white-space: pre; }
   #topBtns { display: flex; flex-direction: column; gap: 8px; align-items: flex-end; }
+
+  #result { position: absolute; left: 12px; right: 12px; bottom: 112px; display: none;
+    background: rgba(0,0,0,.6); border-radius: 16px; padding: 12px 16px; z-index: 10; }
+  #verdict { font-size: 26px; font-weight: 800; letter-spacing: .02em; }
+  #verdict.yes { color: #ffcf6e; }
+  #verdict.no { color: #bbb; }
+  .bar { position: relative; height: 10px; background: #444; border-radius: 5px; margin: 8px 0 4px; overflow: hidden; }
+  .bar > div { height: 100%; background: #ffcf6e; width: 0; transition: width .12s linear; }
+  #thMark { position: absolute; top: -2px; bottom: -2px; width: 2px; background: #fff; }
+  #scoreText { font-size: 13px; color: #ddd; display: flex; justify-content: space-between; }
+  #thRow { font-size: 13px; color: #ddd; display: flex; align-items: center; gap: 8px; margin-top: 6px; }
+  #thRow input { flex: 1; }
 
   #bottom { position: absolute; bottom: 28px; left: 0; right: 0; display: none;
     justify-content: space-around; align-items: center; z-index: 10; }
-  .round { width: 54px; height: 54px; border-radius: 50%; background: rgba(0,0,0,.5);
-    font-size: 24px; display: flex; align-items: center; justify-content: center; }
-  #shutter { width: 74px; height: 74px; border-radius: 50%; background: #fff;
-    box-shadow: 0 0 0 5px rgba(255,255,255,.4); }
-  #shutter:active { transform: scale(.92); }
-  #flash { position: absolute; inset: 0; background: #fff; opacity: 0;
-    pointer-events: none; z-index: 15; }
+  .round { width: 54px; height: 54px; border-radius: 50%; background: rgba(0,0,0,.55);
+    font-size: 22px; display: flex; align-items: center; justify-content: center; }
+  #pauseBtn { width: 70px; height: 70px; border-radius: 50%; background: #fff; color: #002233;
+    font-size: 15px; font-weight: 700; box-shadow: 0 0 0 5px rgba(255,255,255,.35); }
 
   #start { position: absolute; inset: 0; display: flex; flex-direction: column;
     align-items: center; justify-content: center; gap: 16px; padding: 24px;
     text-align: center; line-height: 1.7; background: #111; z-index: 20; }
   .primary { background: #7fd4ff; color: #002233; font-weight: 700;
     padding: 14px 28px; border-radius: 999px; font-size: 17px; }
-  .secondary { background: #333; padding: 12px 22px; border-radius: 999px; }
-
-  #preview { position: absolute; inset: 0; background: rgba(0,0,0,.92); z-index: 30;
-    display: none; flex-direction: column; align-items: center; justify-content: center;
-    gap: 16px; padding: 16px; box-sizing: border-box; }
-  #preview img { max-width: 100%; max-height: 70vh; border-radius: 8px; }
-  #preview .row { display: flex; gap: 12px; flex-wrap: wrap; justify-content: center; }
+  #startMsg { color: #ffb37f; white-space: pre-wrap; }
 </style>
-<script type="importmap">
-{ "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js" } }
-</script>
+<!-- ONNX Runtime Web（MobileNetV3 用）。WebGPU が使えない端末では自動で CPU(wasm) を使う -->
+<script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.20.1/dist/ort.webgpu.min.js"></script>
 </head>
 <body>
 <video id="video" playsinline muted autoplay></video>
-<canvas id="bg"></canvas>
-<canvas id="gl"></canvas>
+<canvas id="view"></canvas>
 
 <div id="top">
-  <div id="hint" style="display:none">1本指：移動　ピンチ：拡大縮小<br>2本指でひねる：回転</div>
+  <div id="stats"></div>
   <div id="topBtns">
-    <button class="chip" id="objBtn">3D表示 OFF</button>
-    <button class="chip" id="labelBtn">名前表示 OFF</button>
-    <button class="chip" id="maskBtn">人を黒塗り OFF</button>
-    <button class="chip" id="bgBtn" style="display:none">背景 そのまま</button>
-    <button class="chip on" id="tiltBtn" style="display:none">傾き追従 ON</button>
-    <button class="chip" id="resetBtn" style="display:none">位置リセット</button>
+    <button class="chip on" id="modelBtn">モデル</button>
+    <button class="chip" id="devBtn">実行: 自動</button>
   </div>
+</div>
+
+<div id="result">
+  <div id="verdict">…</div>
+  <div class="bar"><div id="scoreBar"></div><span id="thMark"></span></div>
+  <div id="scoreText"><span id="scoreNum">チュロスらしさ –</span><span>枠の中を判定</span></div>
+  <div id="thRow">判定の基準 <input id="th" type="range" min="0.3" max="0.95" step="0.05" value="0.7"> <b id="thv">0.70</b></div>
 </div>
 
 <div id="bottom">
-  <button class="round" id="shapeBtn" aria-label="オブジェクト切替" style="visibility:hidden">◆</button>
-  <button id="shutter" aria-label="撮影"></button>
+  <span class="round" style="visibility:hidden"></span>
+  <button id="pauseBtn">停止</button>
   <button class="round" id="flipBtn" aria-label="カメラ切替">⟲</button>
 </div>
-<div id="flash"></div>
 
 <div id="start">
-  <div><b style="font-size:20px">ARカメラ サンプル</b></div>
-  <div>カメラ映像の上に3Dオブジェクトを置いて<br>写真を撮れます。マーカーは不要です。</div>
+  <div><b style="font-size:20px">チュロス判定カメラ</b></div>
+  <div>カメラに映ったものがチュロスかどうかを<br>端末の中だけでリアルタイムに判定します。<br>（映像はどこにも送信されません）</div>
   <button class="primary" id="startBtn">カメラを起動</button>
-  <div id="startMsg" style="color:#ffb37f"></div>
-</div>
-
-<div id="preview">
-  <img id="photo" alt="撮影した写真">
-  <div class="row">
-    <button class="primary" id="saveBtn">保存</button>
-    <button class="secondary" id="shareBtn" style="display:none">共有</button>
-    <button class="secondary" id="closeBtn">閉じる</button>
-  </div>
+  <div id="startMsg"></div>
 </div>
 
 <script type="module">
-import * as THREE from 'three';
+const MP_VER = '0.10.14';
+const SIZE = 224;
+const LABELS = ['churros', 'other'];
+const MODELS = [
+  { name: 'MobileNetV3-Large', kind: 'onnx', url: 'models/mobilenet_v3_large.onnx', mb: 16.8 },
+  { name: 'MobileNetV3-Small', kind: 'onnx', url: 'models/mobilenet_v3_small.onnx', mb: 6.1 },
+  { name: 'EfficientNet-Lite0', kind: 'mediapipe', url: 'models/efficientnet_lite0_int8.tflite', mb: 4.1 },
+];
+const DEVICES = ['auto', 'cpu'];   // auto = GPU を試して駄目なら CPU
 
 const $ = id => document.getElementById(id);
 const video = $('video');
-const bg = $('bg');
-const bgCtx = bg.getContext('2d');
-const canvas = $('gl');
+const view = $('view');
+const vctx = view.getContext('2d');
+const crop = document.createElement('canvas');            // 判定に使う 224x224 の中央切り抜き
+crop.width = crop.height = SIZE;
+const cctx = crop.getContext('2d', { willReadFrequently: true });
+const input = new Float32Array(3 * SIZE * SIZE);
 
-// ===== three.js =====
-const renderer = new THREE.WebGLRenderer({ canvas, alpha: true, antialias: true });
-renderer.setPixelRatio(Math.min(devicePixelRatio || 1, 2));
-renderer.outputColorSpace = THREE.SRGBColorSpace;
+let modelIdx = 0, devIdx = 0;
+let runner = null;            // { name, backend, run(canvas) -> Promise<churrosScore> }
+let loadingModel = false;
+let paused = false, busy = false;
+let smooth = null;            // 表示用に平滑化したスコア
+const times = [];             // 直近の推論時間(ms)
+let frames = 0, fps = 0, fpsT = performance.now();
 
-const scene = new THREE.Scene();
-const camera = new THREE.PerspectiveCamera(60, 1, 0.1, 100);
-
-scene.add(new THREE.HemisphereLight(0xffffff, 0x445566, 2.2));
-const dir = new THREE.DirectionalLight(0xffffff, 1.6);
-dir.position.set(2, 3, 4);
-scene.add(dir);
-
-const holder = new THREE.Group();
-holder.visible = false;   // 3Dは最初は非表示
-scene.add(holder);
-
-const shapes = [
-  () => new THREE.Mesh(new THREE.TorusKnotGeometry(0.5, 0.17, 160, 20),
-        new THREE.MeshStandardMaterial({ color: 0xff7aa8, roughness: 0.35, metalness: 0.2 })),
-  () => new THREE.Mesh(new THREE.BoxGeometry(0.9, 0.9, 0.9),
-        new THREE.MeshStandardMaterial({ color: 0xffd36e, roughness: 0.4 })),
-  () => new THREE.Mesh(new THREE.TorusGeometry(0.5, 0.2, 32, 64),
-        new THREE.MeshStandardMaterial({ color: 0x7fd4ff, roughness: 0.25, metalness: 0.3 })),
-  () => new THREE.Mesh(new THREE.IcosahedronGeometry(0.6, 0),
-        new THREE.MeshStandardMaterial({ color: 0x9cf28a, roughness: 0.5, flatShading: true })),
-];
-let shapeIndex = 0;
-let current = null;
-function setShape(i) {
-  if (current) { holder.remove(current); current.geometry.dispose(); current.material.dispose(); }
-  current = shapes[i]();
-  holder.add(current);
-}
-setShape(0);
-
-const DIST = 4;
-function resetObject() {
-  holder.position.copy(new THREE.Vector3(0, 0, -DIST).applyQuaternion(camera.quaternion));
-  holder.scale.setScalar(1);
-  holder.rotation.set(0.3, 0, 0);
-}
-
-function resize() {
-  const w = innerWidth, h = innerHeight;
-  renderer.setSize(w, h, false);
-  bg.width = canvas.width; bg.height = canvas.height;   // 3Dと同じ解像度
-  camera.aspect = w / h;
-  camera.updateProjectionMatrix();
-}
-addEventListener('resize', resize);
-resize();
-
-// ===== 傾き追従 =====
-let tiltOn = true;
-let baseQ = null, deviceQ = null;
-const zee = new THREE.Vector3(0, 0, 1);
-const euler = new THREE.Euler();
-const q0 = new THREE.Quaternion();
-const q1 = new THREE.Quaternion(-Math.sqrt(0.5), 0, 0, Math.sqrt(0.5));
-
-function onOrientation(e) {
-  if (e.alpha == null) return;
-  const d = THREE.MathUtils.degToRad;
-  const orient = d((screen.orientation && screen.orientation.angle) || window.orientation || 0);
-  const q = new THREE.Quaternion();
-  euler.set(d(e.beta), d(e.alpha), -d(e.gamma), 'YXZ');
-  q.setFromEuler(euler);
-  q.multiply(q1);
-  q.multiply(q0.setFromAxisAngle(zee, -orient));
-  deviceQ = q;
-  if (!baseQ) baseQ = q.clone();
-}
-async function enableOrientation() {
-  try {
-    if (typeof DeviceOrientationEvent !== 'undefined' &&
-        typeof DeviceOrientationEvent.requestPermission === 'function') {
-      const r = await DeviceOrientationEvent.requestPermission(); // iPhone用
-      if (r !== 'granted') throw new Error('denied');
-    }
-    addEventListener('deviceorientation', onOrientation);
-  } catch (_) { tiltOn = false; updateTiltBtn(); }
-}
-function updateCameraFromDevice() {
-  if (tiltOn && deviceQ && baseQ) camera.quaternion.copy(baseQ.clone().invert().multiply(deviceQ));
-  else camera.quaternion.identity();
-}
-function updateTiltBtn() {
-  const b = $('tiltBtn');
-  b.textContent = '傾き追従 ' + (tiltOn ? 'ON' : 'OFF');
-  b.classList.toggle('on', tiltOn);
-}
-$('tiltBtn').addEventListener('click', () => {
-  tiltOn = !tiltOn;
-  baseQ = deviceQ ? deviceQ.clone() : null;
-  updateCameraFromDevice(); resetObject(); updateTiltBtn();
-});
-$('resetBtn').addEventListener('click', () => {
-  baseQ = deviceQ ? deviceQ.clone() : null;
-  updateCameraFromDevice(); resetObject();
-});
-
-// ===== タッチ操作 =====
-const pointers = new Map();
-let gesture = null;
-function camAxes() {
-  return {
-    right: new THREE.Vector3(1, 0, 0).applyQuaternion(camera.quaternion),
-    up: new THREE.Vector3(0, 1, 0).applyQuaternion(camera.quaternion)
-  };
-}
-function unitsPerPixel() {
-  const dist = holder.position.distanceTo(camera.position);
-  return 2 * Math.tan(THREE.MathUtils.degToRad(camera.fov / 2)) * dist / innerHeight;
-}
-canvas.addEventListener('pointerdown', e => {
-  if (!holder.visible) return;   // 非表示中は操作しない
-  canvas.setPointerCapture(e.pointerId);
-  pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
-  gesture = null;
-});
-canvas.addEventListener('pointermove', e => {
-  if (!pointers.has(e.pointerId)) return;
-  const prev = pointers.get(e.pointerId);
-  const cur = { x: e.clientX, y: e.clientY };
-  if (pointers.size === 1) {
-    const k = unitsPerPixel();
-    const { right, up } = camAxes();
-    holder.position.addScaledVector(right, (cur.x - prev.x) * k);
-    holder.position.addScaledVector(up, -(cur.y - prev.y) * k);
-    pointers.set(e.pointerId, cur);
-  } else if (pointers.size === 2) {
-    pointers.set(e.pointerId, cur);
-    const [a, b] = [...pointers.values()];
-    const dist = Math.hypot(b.x - a.x, b.y - a.y);
-    const ang = Math.atan2(b.y - a.y, b.x - a.x);
-    if (gesture) {
-      holder.scale.setScalar(THREE.MathUtils.clamp(holder.scale.x * dist / gesture.dist, 0.2, 5));
-      let dA = ang - gesture.ang;
-      if (dA > Math.PI) dA -= 2 * Math.PI;
-      if (dA < -Math.PI) dA += 2 * Math.PI;
-      holder.rotateY(dA * 1.5);
-    }
-    gesture = { dist, ang };
-  }
-});
-const endPointer = e => { pointers.delete(e.pointerId); gesture = null; };
-canvas.addEventListener('pointerup', endPointer);
-canvas.addEventListener('pointercancel', endPointer);
-canvas.addEventListener('wheel', e => {
-  e.preventDefault();
-  holder.scale.setScalar(THREE.MathUtils.clamp(holder.scale.x * (e.deltaY < 0 ? 1.1 : 0.9), 0.2, 5));
-}, { passive: false });
-
-$('shapeBtn').addEventListener('click', () => {
-  shapeIndex = (shapeIndex + 1) % shapes.length;
-  setShape(shapeIndex);
-  if (!holder.visible) toggleObject();   // 形を選んだら表示に戻す
-});
-
-// 3Dオブジェクトの表示 ON/OFF
-function toggleObject() {
-  holder.visible = !holder.visible;
-  const b = $('objBtn');
-  b.textContent = '3D表示 ' + (holder.visible ? 'ON' : 'OFF');
-  b.classList.toggle('on', holder.visible);
-  $('hint').style.display = holder.visible ? '' : 'none';
-  // ◆ボタンは3D表示中だけ出す（非表示でも場所は確保して撮影ボタンを中央に保つ）
-  $('shapeBtn').style.visibility = holder.visible ? 'visible' : 'hidden';
-  $('resetBtn').style.display = holder.visible ? '' : 'none';
-  $('tiltBtn').style.display = holder.visible ? '' : 'none';
-}
-$('objBtn').addEventListener('click', toggleObject);
-
-// ===== 人の黒塗り（MediaPipe 人物セグメンテーション） =====
-const MP_VER = '0.10.14';
-let segmenter = null, segLoading = false;
-let maskOn = false;
-const small = document.createElement('canvas');      // 解析用の縮小フレーム
-const smallCtx = small.getContext('2d', { willReadFrequently: true });
-const maskCanvas = document.createElement('canvas'); // 黒塗りマスク
-const maskCtx = maskCanvas.getContext('2d');
-const softCanvas = document.createElement('canvas'); // 背景変更用（輪郭なめらか）
-const softCtx = softCanvas.getContext('2d');
-let maskReady = false;
-let lastVideoTime = -1;
-
-// ===== 背景変更（インカメラ時のみ）：none / green / blur =====
-const BG_MODES = ['none', 'green', 'blur'];
-const BG_LABEL = { none: '背景 そのまま', green: '背景 グリーン', blur: '背景 ぼかし' };
-let bgMode = 'none';
-const personCanvas = document.createElement('canvas'); // 人だけ切り抜いた映像
-const personCtx = personCanvas.getContext('2d');
-const blurCanvas = document.createElement('canvas');   // ぼかし用の極小フレーム
-const blurCtx = blurCanvas.getContext('2d');
-
-function updateBgBtn(text) {
-  const b = $('bgBtn');
-  b.textContent = text || BG_LABEL[bgMode];
-  b.classList.toggle('on', bgMode !== 'none');
-  b.style.display = mirror ? '' : 'none';   // インカメラ（鏡像表示）のときだけ出す
-}
-$('bgBtn').addEventListener('click', async () => {
-  if (!segmenter) {
-    updateBgBtn('読み込み中…');
-    try { await ensureSegmenter(); }
-    catch (e) { updateBgBtn('背景 読込失敗'); return; }
-  }
-  bgMode = BG_MODES[(BG_MODES.indexOf(bgMode) + 1) % BG_MODES.length];
-  updateBgBtn();
-});
-
-// MediaPipe 本体の読み込み（黒塗り・名前表示で共用）
+// ===== モデル読み込み =====
 let visionLib = null, fileset = null;
 async function loadVision() {
   if (!visionLib) {
@@ -320,314 +117,228 @@ async function loadVision() {
     fileset = await visionLib.FilesetResolver.forVisionTasks(
       `https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@${MP_VER}/wasm`);
   }
-  return { ...visionLib, fileset };
+  return visionLib;
 }
 
-async function loadSegmenter() {
-  segLoading = true;
-  const { ImageSegmenter } = await loadVision();
-  const opts = delegate => ({
-    baseOptions: {
-      modelAssetPath: 'https://storage.googleapis.com/mediapipe-models/image_segmenter/selfie_segmenter/float16/latest/selfie_segmenter.tflite',
-      delegate
+async function createOnnx(m, dev) {
+  ort.env.wasm.numThreads = self.crossOriginIsolated ? Math.min(4, navigator.hardwareConcurrency || 1) : 1;
+  const tries = dev === 'auto' && navigator.gpu ? ['webgpu', 'wasm'] : ['wasm'];
+  let session = null, backend = null, lastErr = null;
+  for (const ep of tries) {
+    try {
+      const s = await ort.InferenceSession.create(m.url, { executionProviders: [ep] });
+      await s.run({ image: new ort.Tensor('float32', input, [1, 3, SIZE, SIZE]) });  // 試し推論
+      session = s; backend = ep; break;
+    } catch (e) { lastErr = e; }
+  }
+  if (!session) throw lastErr;
+  return {
+    backend: backend === 'webgpu' ? 'GPU (WebGPU)' : 'CPU (wasm)',
+    async run(src) {
+      const px = cctx.getImageData(0, 0, SIZE, SIZE).data;
+      const n = SIZE * SIZE;
+      for (let i = 0; i < n; i++) {
+        input[i] = px[i * 4] / 255;
+        input[n + i] = px[i * 4 + 1] / 255;
+        input[2 * n + i] = px[i * 4 + 2] / 255;
+      }
+      const out = await session.run({ image: new ort.Tensor('float32', input, [1, 3, SIZE, SIZE]) });
+      return out.probs.data[LABELS.indexOf('churros')];
     },
-    runningMode: 'VIDEO',
-    outputCategoryMask: false,
-    outputConfidenceMasks: true
-  });
-  try { segmenter = await ImageSegmenter.createFromOptions(fileset, opts('GPU')); }
-  catch (_) { segmenter = await ImageSegmenter.createFromOptions(fileset, opts('CPU')); }
-  segLoading = false;
+    close() { session.release && session.release(); },
+  };
 }
 
-function updateMaskBtn(text) {
-  const b = $('maskBtn');
-  b.textContent = text || ('人を黒塗り ' + (maskOn ? 'ON' : 'OFF'));
-  b.classList.toggle('on', maskOn);
-}
-// 黒塗り・背景変更で共用する読み込み（同時に押されても1回だけ読む）
-let segPromise = null;
-function ensureSegmenter() {
-  if (!segPromise) segPromise = loadSegmenter().catch(e => { segPromise = null; segLoading = false; throw e; });
-  return segPromise;
-}
-
-$('maskBtn').addEventListener('click', async () => {
-  if (!segmenter) {
-    updateMaskBtn('読み込み中…');
-    try { await ensureSegmenter(); }
-    catch (e) { updateMaskBtn('黒塗り 読込失敗'); return; }
+async function createMediapipe(m, dev) {
+  const { ImageClassifier } = await loadVision();
+  const opts = delegate => ({ baseOptions: { modelAssetPath: m.url, delegate }, runningMode: 'VIDEO', maxResults: 2 });
+  let clf = null, backend = 'CPU';
+  if (dev === 'auto') {
+    // 作成できても推論で失敗することがある（int8 モデル等）ので試し推論までして確認
+    try {
+      clf = await ImageClassifier.createFromOptions(fileset, opts('GPU'));
+      clf.classifyForVideo(crop, performance.now());
+      backend = 'GPU (WebGL)';
+    } catch (_) { try { clf && clf.close(); } catch (_) {} clf = null; }
   }
-  maskOn = !maskOn;
-  maskReady = false;
-  updateMaskBtn();
-});
-
-function segmentFrame() {
-  if (!segmenter || video.readyState < 2 || video.currentTime === lastVideoTime) return;
-  lastVideoTime = video.currentTime;
-  const vw = video.videoWidth, vh = video.videoHeight;
-  const sw = 256, sh = Math.round(256 * vh / vw);
-  if (small.width !== sw || small.height !== sh) { small.width = sw; small.height = sh; }
-  smallCtx.drawImage(video, 0, 0, sw, sh);
-
-  segmenter.segmentForVideo(small, performance.now(), result => {
-    const m = result.confidenceMasks && result.confidenceMasks[0];
-    if (!m) return;
-    const w = m.width, h = m.height, conf = m.getAsFloat32Array();
-    if (maskCanvas.width !== w || maskCanvas.height !== h) { maskCanvas.width = w; maskCanvas.height = h; }
-    if (softCanvas.width !== w || softCanvas.height !== h) { softCanvas.width = w; softCanvas.height = h; }
-    const img = maskCtx.createImageData(w, h);
-    const soft = softCtx.createImageData(w, h);
-    const d = img.data, sd = soft.data;
-    for (let i = 0; i < conf.length; i++) {
-      // 黒塗り用：少し低めのしきい値で、人の輪郭まで確実に覆う
-      d[i * 4 + 3] = conf[i] > 0.25 ? 255 : 0;   // RGB は 0（黒）
-      // 背景変更用：輪郭をなめらかにするため、確信度に応じて半透明に
-      const a = Math.min(1, Math.max(0, (conf[i] - 0.3) / 0.4));
-      sd[i * 4 + 3] = a * 255;
-    }
-    maskCtx.putImageData(img, 0, 0);
-    softCtx.putImageData(soft, 0, 0);
-    maskReady = true;
-  });
-}
-
-// ===== 名前表示（MediaPipe 物体検出 / COCO 80種類） =====
-const JA = {
-  'person': '人', 'laptop': 'ノートPC', 'tv': 'モニター', 'keyboard': 'キーボード',
-  'mouse': 'マウス', 'chair': '椅子', 'dining table': '机', 'cell phone': 'スマホ',
-  'cup': 'カップ', 'bottle': 'ボトル', 'book': '本', 'potted plant': '観葉植物',
-  'couch': 'ソファ', 'clock': '時計', 'backpack': 'リュック', 'handbag': 'バッグ',
-  'remote': 'リモコン', 'scissors': 'はさみ', 'umbrella': '傘', 'refrigerator': '冷蔵庫',
-  'microwave': '電子レンジ', 'sink': 'シンク', 'vase': '花瓶', 'tie': 'ネクタイ',
-  'wine glass': 'グラス', 'bowl': 'ボウル', 'suitcase': 'スーツケース', 'bench': 'ベンチ',
-  'oven': 'オーブン', 'toaster': 'トースター', 'bed': 'ベッド', 'teddy bear': 'ぬいぐるみ'
-};
-let detector = null, detLoading = false, labelOn = false;
-let detections = [], detFrameW = 1, detFrameH = 1, lastDetAt = 0;
-const detCanvas = document.createElement('canvas');
-const detCtx = detCanvas.getContext('2d');
-
-async function loadDetector() {
-  detLoading = true;
-  const { ObjectDetector } = await loadVision();
-  const opts = delegate => ({
-    baseOptions: {
-      modelAssetPath: 'https://storage.googleapis.com/mediapipe-models/object_detector/efficientdet_lite0/float16/1/efficientdet_lite0.tflite',
-      delegate
+  if (!clf) clf = await ImageClassifier.createFromOptions(fileset, opts('CPU'));
+  return {
+    backend,
+    async run(src) {
+      const r = clf.classifyForVideo(src, performance.now());
+      const c = r.classifications[0].categories.find(x => x.categoryName === 'churros');
+      return c ? c.score : 0;
     },
-    runningMode: 'VIDEO',
-    scoreThreshold: 0.35,
-    maxResults: 15
-  });
-  try { detector = await ObjectDetector.createFromOptions(fileset, opts('GPU')); }
-  catch (_) { detector = await ObjectDetector.createFromOptions(fileset, opts('CPU')); }
-  detLoading = false;
+    close() { clf.close(); },
+  };
 }
 
-function updateLabelBtn(text) {
-  const b = $('labelBtn');
-  b.textContent = text || ('名前表示 ' + (labelOn ? 'ON' : 'OFF'));
-  b.classList.toggle('on', labelOn);
-}
-$('labelBtn').addEventListener('click', async () => {
-  if (detLoading) return;
-  if (!detector) {
-    updateLabelBtn('読み込み中…');
-    try { await loadDetector(); }
-    catch (e) { detLoading = false; updateLabelBtn('名前表示 読込失敗'); return; }
+async function loadModel() {
+  loadingModel = true;
+  const m = MODELS[modelIdx], dev = DEVICES[devIdx];
+  $('modelBtn').textContent = `${m.name} 読み込み中…`;
+  if (runner) { try { runner.close(); } catch (_) {} runner = null; }
+  times.length = 0; smooth = null;
+  const t0 = performance.now();
+  try {
+    const r = m.kind === 'onnx' ? await createOnnx(m, dev) : await createMediapipe(m, dev);
+    r.name = m.name; r.mb = m.mb; r.loadMs = performance.now() - t0;
+    runner = r;
+    $('modelBtn').textContent = `${m.name} ▾`;
+  } catch (e) {
+    console.error(e);
+    $('modelBtn').textContent = `${m.name} 読込失敗`;
   }
-  labelOn = !labelOn;
-  detections = [];
-  updateLabelBtn();
+  loadingModel = false;
+}
+$('modelBtn').addEventListener('click', () => {
+  if (loadingModel) return;
+  modelIdx = (modelIdx + 1) % MODELS.length;
+  loadModel();
 });
-
-function detectFrame() {
-  const now = performance.now();
-  if (!detector || video.readyState < 2 || now - lastDetAt < 150) return; // 約7回/秒
-  lastDetAt = now;
-  const vw = video.videoWidth, vh = video.videoHeight;
-  const dw = 480, dh = Math.round(480 * vh / vw);
-  if (detCanvas.width !== dw || detCanvas.height !== dh) { detCanvas.width = dw; detCanvas.height = dh; }
-  detCtx.drawImage(video, 0, 0, dw, dh);
-  const res = detector.detectForVideo(detCanvas, now);
-  detections = res.detections || [];
-  detFrameW = dw; detFrameH = dh;
-}
-
-function drawLabels(ctx, W, H) {
-  const s = Math.max(W / detFrameW, H / detFrameH);
-  const ox = (W - detFrameW * s) / 2, oy = (H - detFrameH * s) / 2;
-  const scale = Math.min(devicePixelRatio || 1, 2);
-  const fs = Math.round(15 * scale);
-  ctx.save();
-  ctx.lineWidth = 3 * scale;
-  ctx.font = `bold ${fs}px system-ui, "Hiragino Sans", sans-serif`;
-  ctx.textBaseline = 'top';
-  for (const d of detections) {
-    const b = d.boundingBox, c = d.categories[0];
-    if (!b || !c) continue;
-    let x = ox + b.originX * s;
-    const y = oy + b.originY * s, w = b.width * s, h = b.height * s;
-    if (mirror) x = W - x - w;
-    ctx.strokeStyle = '#7fd4ff';
-    ctx.strokeRect(x, y, w, h);
-    const label = `${JA[c.categoryName] || c.categoryName} ${Math.round(c.score * 100)}%`;
-    const tw = ctx.measureText(label).width + 12 * scale;
-    const th = fs + 8 * scale;
-    const ty = y - th < 0 ? y : y - th;
-    ctx.fillStyle = '#7fd4ff';
-    ctx.fillRect(x - ctx.lineWidth / 2, ty, tw, th);
-    ctx.fillStyle = '#002233';
-    ctx.fillText(label, x + 6 * scale - ctx.lineWidth / 2, ty + 4 * scale);
-  }
-  ctx.restore();
-}
+$('devBtn').addEventListener('click', () => {
+  if (loadingModel) return;
+  devIdx = (devIdx + 1) % DEVICES.length;
+  $('devBtn').textContent = '実行: ' + (DEVICES[devIdx] === 'auto' ? '自動' : 'CPUのみ');
+  $('devBtn').classList.toggle('on', DEVICES[devIdx] === 'cpu');
+  loadModel();
+});
 
 // ===== カメラ =====
-let facing = 'environment';
-let stream = null;
-let mirror = false;
-
+let facing = 'environment', stream = null, mirror = false;
 async function startCamera() {
   if (stream) stream.getTracks().forEach(t => t.stop());
   stream = await navigator.mediaDevices.getUserMedia({
-    video: { facingMode: { ideal: facing }, width: { ideal: 1280 }, height: { ideal: 720 } },
-    audio: false
-  });
+    video: { facingMode: { ideal: facing }, width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false });
   video.srcObject = stream;
   await video.play();
   const s = stream.getVideoTracks()[0].getSettings();
-  mirror = s.facingMode ? s.facingMode === 'user'
-                        : (facing === 'user' || !/Android|iPhone|iPad/.test(navigator.userAgent));
-  lastVideoTime = -1;
-  maskReady = false;
-  updateBgBtn();
+  mirror = s.facingMode ? s.facingMode === 'user' : (facing === 'user' || !/Android|iPhone|iPad/.test(navigator.userAgent));
 }
 $('flipBtn').addEventListener('click', async () => {
   facing = facing === 'environment' ? 'user' : 'environment';
   try { await startCamera(); } catch (_) {}
 });
+$('pauseBtn').addEventListener('click', () => {
+  paused = !paused;
+  $('pauseBtn').textContent = paused ? '再開' : '停止';
+  paused ? video.pause() : video.play();
+});
 
-// object-fit: cover と同じ切り抜きで描画（鏡像にも対応）
-function drawCover(ctx, src, sw, sh, W, H) {
-  const s = Math.max(W / sw, H / sh);
-  const dw = sw * s, dh = sh * s;
-  ctx.save();
-  if (mirror) { ctx.translate(W, 0); ctx.scale(-1, 1); }
-  ctx.drawImage(src, (W - dw) / 2, (H - dh) / 2, dw, dh);
-  ctx.restore();
+// ===== 判定しきい値 =====
+const th = () => parseFloat($('th').value);
+$('th').addEventListener('input', () => { $('thv').textContent = th().toFixed(2); $('thMark').style.left = th() * 100 + '%'; });
+$('thMark').style.left = th() * 100 + '%';
+
+// ===== 描画 =====
+function resize() {
+  const dpr = Math.min(devicePixelRatio || 1, 2);
+  view.width = innerWidth * dpr; view.height = innerHeight * dpr;
+}
+addEventListener('resize', resize);
+resize();
+
+// 判定範囲：画面に見えている範囲に収まる中央の正方形（映像座標）
+function cropRect(vw, vh) {
+  const s = Math.max(view.width / vw, view.height / vh);       // object-fit: cover の倍率
+  const side = Math.min(vw, vh, view.width / s, view.height / s) * 0.85;
+  return { sx: (vw - side) / 2, sy: (vh - side) / 2, side };
 }
 
-function drawBackground() {
-  const W = bg.width, H = bg.height;
-  const vw = video.videoWidth, vh = video.videoHeight;
+function draw() {
+  const W = view.width, H = view.height, vw = video.videoWidth, vh = video.videoHeight;
   if (!vw || !vh) return;
+  const s = Math.max(W / vw, H / vh), dw = vw * s, dh = vh * s, ox = (W - dw) / 2, oy = (H - dh) / 2;
+  vctx.save();
+  if (mirror) { vctx.translate(W, 0); vctx.scale(-1, 1); }
+  vctx.drawImage(video, ox, oy, dw, dh);
+  vctx.restore();
+  // 判定範囲の枠
+  const { sx, sy, side } = cropRect(vw, vh);
+  let x = ox + sx * s; const y = oy + sy * s, w = side * s;
+  if (mirror) x = W - x - w;
+  const yes = smooth != null && smooth >= th();
+  vctx.save();
+  vctx.fillStyle = 'rgba(0,0,0,.35)';
+  vctx.fillRect(0, 0, W, Math.max(0, y)); vctx.fillRect(0, y + w, W, H - y - w);
+  vctx.fillRect(0, y, Math.max(0, x), w); vctx.fillRect(x + w, y, W - x - w, w);
+  vctx.lineWidth = 4 * Math.min(devicePixelRatio || 1, 2);
+  vctx.strokeStyle = yes ? '#ffcf6e' : 'rgba(255,255,255,.8)';
+  vctx.strokeRect(x, y, w, w);
+  vctx.restore();
+}
 
-  const bgActive = mirror && bgMode !== 'none';
-  if (maskOn || bgActive) segmentFrame();
+async function infer() {
+  if (busy || paused || !runner || loadingModel || video.readyState < 2) return;
+  busy = true;
+  try {
+    const { sx, sy, side } = cropRect(video.videoWidth, video.videoHeight);
+    cctx.drawImage(video, sx, sy, side, side, 0, 0, SIZE, SIZE);
+    const t0 = performance.now();
+    const score = await runner.run(crop);
+    times.push(performance.now() - t0); if (times.length > 30) times.shift();
+    smooth = smooth == null ? score : smooth * 0.6 + score * 0.4;
+    frames++;
+    updateUI(score);
+  } catch (e) { console.error(e); }
+  busy = false;
+}
 
-  if (bgActive && maskReady) {
-    // 1) 背景を描く
-    if (bgMode === 'green') {
-      bgCtx.fillStyle = '#00b140';
-      bgCtx.fillRect(0, 0, W, H);
-    } else {
-      // 極小に縮めてから拡大 → どのブラウザでも効くぼかし
-      const bw = 40, bh = Math.max(1, Math.round(40 * vh / vw));
-      if (blurCanvas.width !== bw || blurCanvas.height !== bh) { blurCanvas.width = bw; blurCanvas.height = bh; }
-      blurCtx.drawImage(video, 0, 0, bw, bh);
-      bgCtx.imageSmoothingEnabled = true;
-      bgCtx.imageSmoothingQuality = 'high';
-      drawCover(bgCtx, blurCanvas, bw, bh, W, H);
-    }
-    // 2) 人だけを切り抜いて上に重ねる
-    if (personCanvas.width !== W || personCanvas.height !== H) { personCanvas.width = W; personCanvas.height = H; }
-    personCtx.globalCompositeOperation = 'source-over';
-    personCtx.clearRect(0, 0, W, H);
-    drawCover(personCtx, video, vw, vh, W, H);
-    personCtx.globalCompositeOperation = 'destination-in';
-    personCtx.imageSmoothingEnabled = true;
-    drawCover(personCtx, softCanvas, softCanvas.width, softCanvas.height, W, H);
-    personCtx.globalCompositeOperation = 'source-over';
-    bgCtx.drawImage(personCanvas, 0, 0);
-  } else {
-    drawCover(bgCtx, video, vw, vh, W, H);
-  }
+function updateUI(raw) {
+  const yes = smooth >= th();
+  const v = $('verdict');
+  v.textContent = yes ? 'チュロス！' : 'チュロスではない';
+  v.className = yes ? 'yes' : 'no';
+  $('scoreBar').style.width = (smooth * 100).toFixed(1) + '%';
+  $('scoreNum').textContent = `チュロスらしさ ${(smooth * 100).toFixed(0)}%（瞬間値 ${(raw * 100).toFixed(0)}%）`;
+}
 
-  if (maskOn) {
-    if (maskReady) {
-      bgCtx.imageSmoothingEnabled = true;
-      drawCover(bgCtx, maskCanvas, maskCanvas.width, maskCanvas.height, W, H);
-    }
-  }
-  if (labelOn) {
-    detectFrame();
-    drawLabels(bgCtx, W, H);
-  }
+function updateStats() {
+  const now = performance.now();
+  if (now - fpsT >= 1000) { fps = frames * 1000 / (now - fpsT); frames = 0; fpsT = now; }
+  if (!runner) { $('stats').textContent = '読み込み中…'; return; }
+  const avg = times.length ? times.reduce((a, b) => a + b, 0) / times.length : 0;
+  const sorted = [...times].sort((a, b) => a - b);
+  const p90 = sorted.length ? sorted[Math.floor(sorted.length * 0.9)] : 0;
+  $('stats').textContent =
+    `${runner.name} (${runner.mb}MB)\n` +
+    `実行: ${runner.backend}\n` +
+    `推論 平均 ${avg.toFixed(1)}ms / 遅い時 ${p90.toFixed(1)}ms\n` +
+    `判定 ${fps.toFixed(1)}回/秒\n` +
+    `読込 ${(runner.loadMs / 1000).toFixed(1)}秒  映像 ${video.videoWidth}x${video.videoHeight}`;
+}
+
+function loop() {
+  draw();
+  infer();
+  updateStats();
+  requestAnimationFrame(loop);
 }
 
 $('startBtn').addEventListener('click', async () => {
   $('startMsg').textContent = '起動中…';
   try {
-    await enableOrientation();
+    if (!navigator.mediaDevices?.getUserMedia) throw new Error('このブラウザ（または http 接続）ではカメラを使えません。https で開いてください。');
     await startCamera();
     $('start').style.display = 'none';
-    $('top').style.display = 'flex';
-    $('bottom').style.display = 'flex';
-    updateTiltBtn();
-    setTimeout(() => { baseQ = deviceQ ? deviceQ.clone() : null; updateCameraFromDevice(); resetObject(); }, 300);
-    resetObject();
-    renderer.setAnimationLoop(() => {
-      drawBackground();
-      updateCameraFromDevice();
-      renderer.render(scene, camera);
-    });
+    for (const id of ['top', 'bottom']) $(id).style.display = 'flex';
+    $('result').style.display = 'block';
+    loadModel();
+    loop();
   } catch (e) {
     $('startMsg').textContent = 'カメラを起動できませんでした：' + (e.message || e);
   }
 });
 
-// ===== 撮影：画面に見えている背景（黒塗り込み）+ 3D を合成 =====
-let lastBlob = null;
-function capture() {
-  const W = canvas.width, H = canvas.height;
-  const out = document.createElement('canvas');
-  out.width = W; out.height = H;
-  const ctx = out.getContext('2d');
-  drawBackground();
-  ctx.drawImage(bg, 0, 0, W, H);
-  renderer.render(scene, camera);
-  ctx.drawImage(canvas, 0, 0, W, H);
-  return new Promise(res => out.toBlob(res, 'image/jpeg', 0.92));
-}
-
-$('shutter').addEventListener('click', async () => {
-  const flash = $('flash');
-  flash.style.transition = 'none'; flash.style.opacity = '0.85';
-  requestAnimationFrame(() => { flash.style.transition = 'opacity .3s'; flash.style.opacity = '0'; });
-  lastBlob = await capture();
-  $('photo').src = URL.createObjectURL(lastBlob);
-  const file = new File([lastBlob], 'ar-photo.jpg', { type: 'image/jpeg' });
-  $('shareBtn').style.display =
-    (navigator.canShare && navigator.canShare({ files: [file] })) ? 'inline-block' : 'none';
-  $('preview').style.display = 'flex';
-});
-$('saveBtn').addEventListener('click', () => {
-  if (!lastBlob) return;
-  const d = new Date(), p = n => String(n).padStart(2, '0');
-  const a = document.createElement('a');
-  a.download = `ar-photo_${d.getFullYear()}${p(d.getMonth()+1)}${p(d.getDate())}_${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}.jpg`;
-  a.href = URL.createObjectURL(lastBlob);
-  a.click();
-});
-$('shareBtn').addEventListener('click', async () => {
-  if (!lastBlob) return;
-  try { await navigator.share({ files: [new File([lastBlob], 'ar-photo.jpg', { type: 'image/jpeg' })] }); }
-  catch (_) {}
-});
-$('closeBtn').addEventListener('click', () => { $('preview').style.display = 'none'; });
+// ===== 動作確認用（開発者ツールから呼ぶ）: 画像URLを現在のモデルで判定 =====
+window.debugClassify = async (url) => {
+  const img = new Image(); img.crossOrigin = 'anonymous'; img.src = url; await img.decode();
+  const side = Math.min(img.width, img.height);
+  cctx.drawImage(img, (img.width - side) / 2, (img.height - side) / 2, side, side, 0, 0, SIZE, SIZE);
+  const t0 = performance.now(); const score = await runner.run(crop);
+  return { model: runner.name, backend: runner.backend, score: +score.toFixed(4), ms: +(performance.now() - t0).toFixed(1) };
+};
+window.debugLoadModel = async (i, dev = 'auto') => { modelIdx = i; devIdx = DEVICES.indexOf(dev); await loadModel(); return runner && { name: runner.name, backend: runner.backend }; };
 </script>
 </body>
 </html>
